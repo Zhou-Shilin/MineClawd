@@ -11,6 +11,8 @@
 
 </div>
 
+https://github.com/user-attachments/assets/baf1b5c6-56be-43ee-90d1-097e9fbc75fe
+
 > [!WARNING]
 > MineClawd is an experimental project. Since it allows the agent to execute JavaScript code in-game, theoretically it can be exploited to run arbitrary Java code through `Java.loadClass()`, leading to potential security risks, including but not limited to data loss, corruption, or unauthorized access.
 > Use at your own risk and ensure you understand the implications of granting OP access to the mod.
