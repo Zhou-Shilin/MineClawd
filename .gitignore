@@ -1,0 +1,72 @@
+# Build / Gradle
+.gradle/
+build/
+out/
+
+# Temporary files
+/.tmp/
+*.tmp
+*.temp
+*.swp
+*~
+.#*
+#*#
+
+# Generated sources / build output
+/generated/
+**/build/generated/
+
+# Fabric / Loom / KubeJS specific
+/kubejs/server_scripts/mineclawd-internal-api.js
+
+# IDEs
+/.idea/
+*.iml
+*.ipr
+*.iws
+/.vscode/
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+
+# Agents
+
+/.agent/
+/.opencode/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+debug.log*
+crash-reports/
+
+# Java / JVM
+*.class
+*.log.*
+*.jar
+!libs/*.jar
+*.keystore
+*.jks
+
+# Secrets / local configs
+.env
+.env.local
+local.properties
+*.secret
+
+# Node
+node_modules/
+
+# Misc
+*.orig
+*.bak
+
+# Keep gradle wrapper and gradle settings tracked
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# End of .gitignore
