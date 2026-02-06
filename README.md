@@ -1,10 +1,19 @@
+<div align="center">
+    <img src="public/mascot.png" width="150" alt="MineClawd Mascot">
+
 # MineClawd
+
+<p>
+    <strong>Bring OpenClaw into Minecraft! The Minecraft Agent that actually do things.</strong>
+</p>
+
+[![Modrinth](https://img.shields.io/badge/Modrinth-RWXmIPlB-00AF5C?style=flat&logo=modrinth)](https://modrinth.com/project/RWXmIPlB)
+
+</div>
 
 > [!WARNING]
 > MineClawd is an experimental project. Since it allows the agent to execute JavaScript code in-game, theoretically it can be exploited to run arbitrary Java code through `Java.loadClass()`, leading to potential security risks, including but not limited to data loss, corruption, or unauthorized access.
 > Use at your own risk and ensure you understand the implications of granting OP access to the mod.
-
-Bring OpenClaw into Minecraft! The Minecraft Agent that actually do things.
 
 MineClawd is a Fabric mod that connects in-game chat commands to an LLM agent capable of tool use through KubeJS.
 

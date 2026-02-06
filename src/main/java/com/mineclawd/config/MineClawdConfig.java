@@ -48,8 +48,8 @@ public class MineClawdConfig {
     @SerialEntry(comment = "Vertex AI API key (express mode).")
     public String vertexApiKey = "";
 
-    @SerialEntry(comment = "Vertex AI model name or full path (e.g., publishers/google/models/gemini-1.5-flash).")
-    public String vertexModel = "publishers/google/models/gemini-1.5-flash";
+    @SerialEntry(comment = "Vertex AI model name or full path (e.g., publishers/google/models/gemini-3-pro-preview).")
+    public String vertexModel = "publishers/google/models/gemini-3-pro-preview";
 
     @SerialEntry(comment = "Enable debug logging for LLM responses and tool calls.")
     public boolean debugMode = false;
