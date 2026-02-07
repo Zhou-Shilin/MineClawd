@@ -3,15 +3,24 @@
   "id": "mineclawd",
   "version": "${version}",
   "name": "MineClawd",
+  "icon": "assets/mineclawd/icon.png",
   "description": "Bring OpenClaw into Minecraft! The Minecraft Agent that actually do things.",
   "authors": [
     "Zhou-Shilin (BaimoQilin)"
   ],
   "license": "Apache-2.0",
   "contact": {
-    "homepage": "https://github.com/BaimoQilin/MineClawd",
-    "sources": "https://github.com/BaimoQilin/MineClawd",
-    "issues": "https://github.com/BaimoQilin/MineClawd/issues"
+    "homepage": "https://github.com/Zhou-Shilin/MineClawd",
+    "sources": "https://github.com/Zhou-Shilin/MineClawd",
+    "issues": "https://github.com/Zhou-Shilin/MineClawd/issues",
+    "modrinth": "https://modrinth.com/project/RWXmIPlB"
+  },
+  "custom": {
+    "modmenu": {
+      "links": {
+        "modmenu.modrinth": "https://modrinth.com/project/RWXmIPlB"
+      }
+    }
   },
   "environment": "*",
   "entrypoints": {
