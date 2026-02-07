@@ -42,6 +42,9 @@ public class MineClawdConfig {
     @SerialEntry(comment = "OpenAI model name (e.g., gpt-4o-mini).")
     public String model = "gpt-4o-mini";
 
+    @SerialEntry(comment = "OpenAI summarize model used to generate session titles.")
+    public String summarizeModel = "gpt-4o-mini";
+
     @SerialEntry(comment = "Vertex AI express mode API base URL (no trailing slash).")
     public String vertexEndpoint = "https://aiplatform.googleapis.com/v1";
 
@@ -50,6 +53,9 @@ public class MineClawdConfig {
 
     @SerialEntry(comment = "Vertex AI model name or full path (e.g., publishers/google/models/gemini-3-pro-preview).")
     public String vertexModel = "publishers/google/models/gemini-3-pro-preview";
+
+    @SerialEntry(comment = "Vertex AI summarize model used to generate session titles.")
+    public String vertexSummarizeModel = "publishers/google/models/gemini-3-pro-preview";
 
     @SerialEntry(comment = "Enable debug logging for LLM responses and tool calls.")
     public boolean debugMode = false;

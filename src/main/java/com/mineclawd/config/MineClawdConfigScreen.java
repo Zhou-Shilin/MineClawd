@@ -65,6 +65,13 @@ public final class MineClawdConfigScreen {
                 .controller(StringControllerBuilder::create)
                 .build();
 
+        Option<String> openAiSummarizeModelOption = Option.<String>createBuilder()
+                .name(Text.literal("Summarize Model"))
+                .description(OptionDescription.of(Text.literal("OpenAI model used to summarize first-round chat into a session title.")))
+                .binding(defaults.summarizeModel, () -> config.summarizeModel, value -> config.summarizeModel = value)
+                .controller(StringControllerBuilder::create)
+                .build();
+
         Option<String> vertexEndpointOption = Option.<String>createBuilder()
                 .name(Text.literal("Endpoint"))
                 .description(OptionDescription.of(Text.literal("Vertex AI base URL (express mode).")))
@@ -90,6 +97,13 @@ public final class MineClawdConfigScreen {
                 .name(Text.literal("Model"))
                 .description(OptionDescription.of(Text.literal("Vertex AI model name or full path (publishers/google/models/...).")))
                 .binding(defaults.vertexModel, () -> config.vertexModel, value -> config.vertexModel = value)
+                .controller(StringControllerBuilder::create)
+                .build();
+
+        Option<String> vertexSummarizeModelOption = Option.<String>createBuilder()
+                .name(Text.literal("Summarize Model"))
+                .description(OptionDescription.of(Text.literal("Vertex AI model used to summarize first-round chat into a session title.")))
+                .binding(defaults.vertexSummarizeModel, () -> config.vertexSummarizeModel, value -> config.vertexSummarizeModel = value)
                 .controller(StringControllerBuilder::create)
                 .build();
 
@@ -120,12 +134,14 @@ public final class MineClawdConfigScreen {
             openAiKeyOption.setAvailable(openAiSelected);
             showOpenAiKeyOption.setAvailable(openAiSelected);
             openAiModelOption.setAvailable(openAiSelected);
+            openAiSummarizeModelOption.setAvailable(openAiSelected);
 
             boolean vertexSelected = providerOption.pendingValue() == MineClawdConfig.LlmProvider.VERTEX_AI;
             vertexEndpointOption.setAvailable(vertexSelected);
             vertexKeyOption.setAvailable(vertexSelected);
             showVertexKeyOption.setAvailable(vertexSelected);
             vertexModelOption.setAvailable(vertexSelected);
+            vertexSummarizeModelOption.setAvailable(vertexSelected);
 
             toolCallLimitOption.setAvailable(limitToolCallsOption.pendingValue());
         };
@@ -145,6 +161,7 @@ public final class MineClawdConfigScreen {
                                 .option(openAiKeyOption)
                                 .option(showOpenAiKeyOption)
                                 .option(openAiModelOption)
+                                .option(openAiSummarizeModelOption)
                                 .build())
                         .group(OptionGroup.createBuilder()
                                 .name(Text.literal("Google Vertex AI"))
@@ -152,6 +169,7 @@ public final class MineClawdConfigScreen {
                                 .option(vertexKeyOption)
                                 .option(showVertexKeyOption)
                                 .option(vertexModelOption)
+                                .option(vertexSummarizeModelOption)
                                 .build())
                         .group(OptionGroup.createBuilder()
                                 .name(Text.literal("Agent"))
