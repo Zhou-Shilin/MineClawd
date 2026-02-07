@@ -7,65 +7,73 @@
     <strong>Bring OpenClaw into Minecraft! The Minecraft Agent that actually do things.</strong>
 </p>
 
+<p>Mascot: <strong>Yuki</strong></p>
+
 [![Modrinth](https://img.shields.io/badge/Modrinth-RWXmIPlB-00AF5C?style=flat&logo=modrinth)](https://modrinth.com/project/RWXmIPlB)
 
 </div>
 
 > [!WARNING]
-> MineClawd is an experimental project. Since it allows the agent to execute JavaScript code in-game, theoretically it can be exploited to run arbitrary Java code through `Java.loadClass()`, leading to potential security risks, including but not limited to data loss, corruption, or unauthorized access.
-> Use at your own risk and ensure you understand the implications of granting OP access to the mod.
+> MineClawd is an experimental project. It can execute generated JavaScript in-game. Treat OP access and API credentials as sensitive, and only use this mod in environments you trust.
 
-MineClawd is a Fabric mod that connects in-game chat commands to an LLM agent capable of tool use through KubeJS.
+MineClawd is a Fabric mod that turns in-game chat into an agent workflow. You describe what you want, and the agent can inspect, modify, and automate gameplay on your server.
 
 ## Features
 
-- In-game agent chat command with session memory.
-- LLM providers: `OpenAI` (including OpenAI-compatible endpoints), `Google Vertex AI`.
-- KubeJS tool loop with auto-generated `kubejs/server_scripts/mineclawd-internal-api.js`.
-- Internal execution command: `/_exec_kubejs_internal <code>`.
-- Tool outputs and real execution errors are returned to the LLM for self-correction.
-- YACL config UI (via Mod Menu button or command), with masked API key display.
-- Debug mode with detailed LLM/tool logs.
-- Optional tool-call round limit.
+- Natural language control: ask for gameplay help, world edits, automation, or admin tasks directly in chat.
+- Real actions, not fixed macros: MineClawd can inspect state and adapt steps while it works.
+- Persistent automation support: it can write and update server-side logic for commands, recipes, drops, listeners, and tick behavior.
+- Session management built for long tasks: create, list, resume, and remove sessions without losing context.
+- Persona system: switch between `default`, `yuki`, or your own custom souls.
+- Rich chat UX: readable progress updates and Markdown/MineDown formatted replies in-game.
+- Multi-provider LLM support: OpenAI-compatible endpoints and Google Vertex AI.
+- Practical guardrails: optional tool-call limits, debug logs, and OP-only command access.
+
+PS: MineClawd executes generated code instead of relying on preset operations, so its capability surface is effectively open-ended.
 
 ## Quick Start
 
-This is the fastest path from zero to a first successful chat.
-
 1. Install Minecraft `1.20.1`, Fabric Loader, and Java `17+`.
-2. Put these mods in your `mods/` folder: `MineClawd`, `Fabric API`, `KubeJS`, `Architectury API`, `Rhino`, `YetAnotherConfigLib (YACL v3)`, and optionally `Mod Menu`.
-3. Start the game once, enter a world/server where you are OP.
-4. Configure MineClawd in-game via `Mod Menu -> MineClawd -> Configure` or command `/mineclawd config`.
-5. Select provider and fill credentials:
-OpenAI fields: `endpoint`, `apiKey`, `model`.
-Vertex AI fields: `vertexEndpoint`, `vertexApiKey`, `vertexModel`.
-6. Run your first prompt: `/mclawd hi`.
+2. Put these mods in `mods/`: `MineClawd`, `Fabric API`, `KubeJS`, `Architectury API`, `Rhino`, `YetAnotherConfigLib (YACL v3)`, and optionally `Mod Menu`.
+3. Start the game once and join a world/server where you have OP.
+4. Open config with `Mod Menu -> MineClawd -> Configure` or `/mineclawd config`.
+5. Choose provider and fill credentials:
+- OpenAI: `endpoint`, `apiKey`, `model`, `summarizeModel`
+- Vertex AI: `vertexEndpoint`, `vertexApiKey`, `vertexModel`, `vertexSummarizeModel`
+6. Send your first prompt: `/mclawd hello`.
 
-If setup is correct, MineClawd replies in chat and keeps session context.
+If setup is correct, MineClawd replies in chat and keeps session memory.
 
 ## Commands
 
-- `/mineclawd prompt <request>`: Send a request to the agent.
-- `/mclawd <request>`: Short alias for prompt.
-- `/mineclawd config`: Open config UI.
-- `/mineclawd new`: Clear current session history.
+- `/mineclawd prompt <request>`: send a request to the agent.
+- `/mclawd <request>`: short alias for prompt.
+- `/mineclawd config`: open the config screen.
+- `/mineclawd sessions new`: create and switch to a new session.
+- `/mineclawd new`: alias of `/mineclawd sessions new`.
+- `/mineclawd sessions list`: list saved sessions (id, title, last modified).
+- `/mineclawd sessions resume <session>`: switch active session (`uuid` or `uuid-title`).
+- `/mineclawd sessions remove <session>`: delete a session (`uuid` or `uuid-title`).
+- `/mineclawd persona`: show active persona and available souls.
+- `/mineclawd persona <soul>`: switch persona.
 
-Notes:
-- Agent commands are OP-only (`permission level 2`).
-- Prompt echo format in chat: `<playername> @MineClawd Original Prompt`.
+## Storage Paths
+
+- Sessions: `gameDir/mineclawd/sessions/`
+- Souls: `gameDir/mineclawd/souls/`
 
 ## Security
 
-- MineClawd can execute generated KubeJS JavaScript through an internal command and `eval`.
-- Keep OP access restricted.
-- Use API keys with least privilege and rotate keys if exposed.
+- MineClawd can execute generated KubeJS JavaScript and run commands.
+- Restrict OP access.
+- Use least-privilege API keys and rotate them if exposed.
 
 ## Credits
 
 - **Project Author**: Zhou-Shilin (BaimoQilin)
-- **Coding Support**: OpenAI Codex (gpt-5.3-codex), OpenCode (claude-opus-4-6)
+- **Coding Support**: OpenAI Codex
 - **Libraries and Upstream Projects**:
-- Fabric Loader, Fabric API, Yarn mappings by the FabricMC community and contributors.
+- Fabric Loader, Fabric API, and Yarn mappings by FabricMC contributors.
 - KubeJS by the KubeJS maintainers and contributors.
 - YetAnotherConfigLib (YACL) by isXander and contributors.
 - Mod Menu by TerraformersMC contributors.
