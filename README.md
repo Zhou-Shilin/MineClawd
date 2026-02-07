@@ -13,6 +13,8 @@
 
 </div>
 
+https://github.com/user-attachments/assets/baf1b5c6-56be-43ee-90d1-097e9fbc75fe
+
 > [!WARNING]
 > MineClawd is an experimental project. It can execute generated JavaScript in-game. Treat OP access and API credentials as sensitive, and only use this mod in environments you trust.
 
