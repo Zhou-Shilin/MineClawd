@@ -20,16 +20,16 @@ MineClawd is a Fabric mod that turns in-game chat into an agent workflow. You de
 
 ## Features
 
-- Natural language control: ask for gameplay help, world edits, automation, or admin tasks directly in chat.
-- Real actions, not fixed macros: MineClawd can inspect state and adapt steps while it works.
-- Persistent automation support: it can write and update server-side logic for commands, recipes, drops, listeners, and tick behavior.
-- Session management built for long tasks: create, list, resume, and remove sessions without losing context.
-- Persona system: switch between `default`, `yuki`, or your own custom souls.
-- Rich chat UX: readable progress updates and Markdown/MineDown formatted replies in-game.
-- Multi-provider LLM support: OpenAI-compatible endpoints and Google Vertex AI.
-- Practical guardrails: optional tool-call limits, debug logs, and OP-only command access.
+- **Natural language control**: ask for gameplay help, world edits, automation, or admin tasks directly in chat.
+- **Real actions, not fixed macros**: MineClawd can inspect state and adapt steps while it works.
+- **Persistent automation support**: it can write and update server-side logic for commands, recipes, drops, listeners, and tick behavior.
+- **Session management built for long tasks**: create, list, resume, and remove sessions without losing context.
+- **Persona system**: switch between `default`, `yuki`, or your own custom souls.
+- **Rich chat UX**: readable progress updates and Markdown/MineDown formatted replies in-game.
+- **Multi-provider LLM support**: OpenAI-compatible endpoints and Google Vertex AI.
+- **Practical guardrails**: optional tool-call limits, debug logs, and OP-only command access.
 
-PS: MineClawd executes generated code instead of relying on preset operations, so its capability surface is effectively open-ended.
+*PS: MineClawd executes generated code instead of relying on preset operations, so its capability surface is effectively open-ended.*
 
 ## Quick Start
 
