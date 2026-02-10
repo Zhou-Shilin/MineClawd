@@ -18,7 +18,19 @@ https://github.com/user-attachments/assets/baf1b5c6-56be-43ee-90d1-097e9fbc75fe
 > [!WARNING]
 > MineClawd is an experimental project. It can execute generated JavaScript in-game. Treat OP access and API credentials as sensitive, and only use this mod in environments you trust.
 
-MineClawd is a Fabric mod that turns in-game chat into an agent workflow. You describe what you want, and the agent can inspect, modify, and automate gameplay on your server.
+**MineClawd** is a Fabric mod that brings the power of AI to Minecraft, letting you modify the game using natural language.
+
+## What it can do
+
+**Turn your words into reality, instantly.**
+
+MineClawd is like a magic wand for your world. You don't need to know how to code—just tell the game what you want, and watch it happen!
+
+- **Dream it, Say it, Play it**: Want a sword made of cookies? A helmet that gives you night vision? Or maybe you want it to rain diamonds? Just describe it in the chat!
+
+- **No Restarts Needed**: Forget about closing the game to add mods. New blocks, items, and recipes are created right before your eyes in real-time.
+
+- **Unleash Your Imagination**: Ever wanted to give your cat a suit of armor? Or walk on clouds that spawn under your feet? With MineClawd, your wildest ideas are just a sentence away.
 
 ## Features
 
@@ -30,8 +42,6 @@ MineClawd is a Fabric mod that turns in-game chat into an agent workflow. You de
 - **Rich chat UX**: readable progress updates and Markdown/MineDown formatted replies in-game.
 - **Multi-provider LLM support**: OpenAI-compatible endpoints and Google Vertex AI.
 - **Practical guardrails**: optional tool-call limits, debug logs, and OP-only command access.
-
-*PS: MineClawd executes generated code instead of relying on preset operations, so its capability surface is effectively open-ended.*
 
 ## Quick Start
 
