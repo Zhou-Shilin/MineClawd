@@ -2,6 +2,54 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.0] - 2026-02-10
+
+### Added
+
+- Runtime dynamic placeholder registry with `30` item slots, `30` block slots, and `30` fluid slots.
+- Dynamic content tool suite:
+- `list-dynamic-content`
+- `register-dynamic-item`
+- `register-dynamic-block`
+- `register-dynamic-fluid`
+- `update-dynamic-item`
+- `update-dynamic-block`
+- `update-dynamic-fluid`
+- `unregister-dynamic-content`
+- Client-side dynamic model/render pipeline for runtime material substitution and fluid tint rendering.
+- KubeJS callback bridge APIs:
+- `global.mineclawd.requestWithSession(player, session_ref, request)`
+- `global.mineclawd.requestOneShot(request, context)`
+- aliases `callWithSession` and `callOneShot`.
+- `/mineclawd history` command with a client-opened written book view and rich text rendering.
+- `ask-user-question` tool with client question popup UI, option buttons, free-form response, and timeout handling.
+- LLM request recovery UX with clickable `[Retry]` and `[Adjust Prompt]` chat actions.
+- `/mineclawd retry <token>` command and failed-request token tracking.
+- `/mineclawd sessions repair [session]` command to repair malformed session history turns.
+- `sync-command-tree` tool to refresh Brigadier command trees for online players.
+
+### Changed
+
+- Dynamic registry runtime mode is now configurable via `dynamic-registry-mode`:
+- `AUTO`: enabled in single-player runtime, disabled on dedicated servers by default.
+- `ENABLED`: forces runtime placeholders on (dedicated servers warn that clients must install MineClawd).
+- `DISABLED`: fully off.
+- Dynamic placeholder state is now persisted and restored across relog/restart, and synced to players on join.
+- Dynamic fluid defaults now keep water-like movement behavior (flow speed, tick rate, level decrease, collision profile).
+- Added water fluid-tag compatibility entries for all dynamic still/flowing fluids.
+- System prompt now conditionally appends dynamic-registry guidance only when runtime placeholders are enabled.
+- System prompt now documents KubeJS callback usage and session-binding constraints.
+- Session prompt context now includes current session id/token for callback wiring.
+- LLM error handling now rolls back failed prompts from session history to avoid duplicate retries.
+- KubeJS reload error parsing now filters common success lines (`0 errors`, `0 warnings`) to reduce false positives.
+
+### Fixed
+
+- Fixed dynamic creative-tab visibility desync after rejoin by synchronizing server-side dynamic state to clients.
+- Fixed dynamic block/item/fluid runtime properties being lost after restart by persisting registry payload in world state.
+- Fixed Vertex AI function-call/function-response turn mismatch recovery with in-session normalization and repair command support.
+- Fixed `/mineclawd history` client UX to open the book screen directly without requiring an inventory slot.
+
 ## [1.1.0] - 2026-02-07
 
 ### Added
