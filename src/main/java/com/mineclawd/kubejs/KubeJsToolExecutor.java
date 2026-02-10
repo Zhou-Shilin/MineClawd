@@ -267,6 +267,24 @@ public final class KubeJsToolExecutor {
         return new ToolExecutionResult(success, out.toString().trim());
     }
 
+    public static ToolExecutionResult syncCommandTree(ServerCommandSource source) {
+        if (source == null || source.getServer() == null) {
+            return new ToolExecutionResult(false, "No server available.");
+        }
+        int refreshed = 0;
+        try {
+            var server = source.getServer();
+            var commandManager = server.getCommandManager();
+            for (var player : server.getPlayerManager().getPlayerList()) {
+                commandManager.sendCommandTree(player);
+                refreshed++;
+            }
+            return new ToolExecutionResult(true, "Refreshed command tree for " + refreshed + " online player(s).");
+        } catch (Exception e) {
+            return new ToolExecutionResult(false, "Failed to sync command tree: " + formatException(e));
+        }
+    }
+
     private static String encodeCode(String code) {
         if (code == null) {
             return "";
@@ -459,6 +477,11 @@ public final class KubeJsToolExecutor {
 
     private static boolean isKubeErrorLine(String lower) {
         if (lower == null || lower.isBlank()) {
+            return false;
+        }
+        if (lower.contains("with 0 errors")
+                || lower.contains("0 errors and 0 warnings")
+                || lower.contains("reloaded with no kubejs errors")) {
             return false;
         }
         boolean mentionsKube = lower.contains("kubejs")

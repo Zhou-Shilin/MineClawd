@@ -1,5 +1,6 @@
 package com.mineclawd.config;
 
+import com.mineclawd.player.PlayerSettingsManager.RequestBroadcastTarget;
 import dev.isxander.yacl3.api.ConfigCategory;
 import dev.isxander.yacl3.api.Option;
 import dev.isxander.yacl3.api.OptionDescription;
@@ -11,23 +12,50 @@ import dev.isxander.yacl3.api.controller.StringControllerBuilder;
 import dev.isxander.yacl3.api.controller.IntegerSliderControllerBuilder;
 import com.mineclawd.config.ui.MaskedStringController;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.MinecraftClient;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.text.Text;
 
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Environment(EnvType.CLIENT)
 public final class MineClawdConfigScreen {
+    private static RequestBroadcastTarget cachedBroadcastTarget = RequestBroadcastTarget.SELF;
+    private static boolean broadcastTargetSyncedFromServer = false;
+
     private MineClawdConfigScreen() {
     }
 
     public static Screen create(Screen parent) {
+        return createInternal(parent, cachedBroadcastTarget.commandValue());
+    }
+
+    public static Screen create(Screen parent, String initialBroadcastTarget) {
+        syncBroadcastTargetFromServer(initialBroadcastTarget);
+        return createInternal(parent, initialBroadcastTarget);
+    }
+
+    public static void syncBroadcastTargetFromServer(String value) {
+        cachedBroadcastTarget = parseBroadcastTarget(value);
+        broadcastTargetSyncedFromServer = true;
+    }
+
+    public static void clearBroadcastTargetServerSync() {
+        broadcastTargetSyncedFromServer = false;
+    }
+
+    private static Screen createInternal(Screen parent, String initialBroadcastTarget) {
         MineClawdConfig.HANDLER.load();
         MineClawdConfig config = MineClawdConfig.get();
         MineClawdConfig defaults = MineClawdConfig.HANDLER.defaults();
         AtomicBoolean revealOpenAiKey = new AtomicBoolean(false);
         AtomicBoolean revealVertexKey = new AtomicBoolean(false);
+        AtomicReference<RequestBroadcastTarget> broadcastTarget = new AtomicReference<>(
+                parseBroadcastTarget(initialBroadcastTarget)
+        );
 
         Option<MineClawdConfig.LlmProvider> providerOption = Option.<MineClawdConfig.LlmProvider>createBuilder()
                 .name(Text.literal("Provider"))
@@ -128,6 +156,26 @@ public final class MineClawdConfigScreen {
                 .controller(option -> IntegerSliderControllerBuilder.create(option).range(1, 20).step(1))
                 .build();
 
+        Option<MineClawdConfig.DynamicRegistryMode> dynamicRegistryModeOption = Option.<MineClawdConfig.DynamicRegistryMode>createBuilder()
+                .name(Text.literal("Dynamic Registry Mode"))
+                .description(OptionDescription.of(Text.literal("AUTO: enabled in single-player runtime and disabled on dedicated servers. ENABLED on dedicated servers requires clients to install MineClawd.")))
+                .binding(defaults.dynamicRegistryMode, () -> config.dynamicRegistryMode, value -> config.dynamicRegistryMode = value)
+                .controller(option -> EnumDropdownControllerBuilder.create(option)
+                        .formatValue(value -> Text.literal(value.displayName())))
+                .build();
+
+        Option<RequestBroadcastTarget> broadcastTargetOption = Option.<RequestBroadcastTarget>createBuilder()
+                .name(Text.literal("Broadcast Requests To"))
+                .description(OptionDescription.of(Text.literal("Who sees your '<Player> @MineClawd ...' line and task start/finish status. Only available while connected to a MineClawd server.")))
+                .binding(
+                        RequestBroadcastTarget.SELF,
+                        broadcastTarget::get,
+                        value -> broadcastTarget.set(value == null ? RequestBroadcastTarget.SELF : value)
+                )
+                .controller(option -> EnumDropdownControllerBuilder.create(option)
+                        .formatValue(value -> Text.literal(value.displayName())))
+                .build();
+
         Runnable updateAvailability = () -> {
             boolean openAiSelected = providerOption.pendingValue() == MineClawdConfig.LlmProvider.OPENAI;
             openAiEndpointOption.setAvailable(openAiSelected);
@@ -144,6 +192,7 @@ public final class MineClawdConfigScreen {
             vertexSummarizeModelOption.setAvailable(vertexSelected);
 
             toolCallLimitOption.setAvailable(limitToolCallsOption.pendingValue());
+            broadcastTargetOption.setAvailable(broadcastTargetSyncedFromServer);
         };
 
         providerOption.addEventListener((option, event) -> updateAvailability.run());
@@ -171,15 +220,46 @@ public final class MineClawdConfigScreen {
                                 .option(vertexModelOption)
                                 .option(vertexSummarizeModelOption)
                                 .build())
+                        .build())
+                .category(ConfigCategory.createBuilder()
+                        .name(Text.literal("Misc"))
                         .group(OptionGroup.createBuilder()
                                 .name(Text.literal("Agent"))
                                 .option(debugModeOption)
                                 .option(limitToolCallsOption)
                                 .option(toolCallLimitOption)
+                                .option(dynamicRegistryModeOption)
+                                .build())
+                        .group(OptionGroup.createBuilder()
+                                .name(Text.literal("Chat"))
+                                .option(broadcastTargetOption)
                                 .build())
                         .build())
-                .save(MineClawdConfig.HANDLER::save)
+                .save(() -> {
+                    MineClawdConfig.HANDLER.save();
+                    RequestBroadcastTarget selected = broadcastTarget.get() == null
+                            ? RequestBroadcastTarget.SELF
+                            : broadcastTarget.get();
+                    cachedBroadcastTarget = selected;
+                    if (broadcastTargetSyncedFromServer) {
+                        MinecraftClient client = MinecraftClient.getInstance();
+                        if (client.player != null && client.player.networkHandler != null) {
+                            client.player.networkHandler.sendChatCommand(
+                                    "mineclawd config broadcast-requests-to " + selected.commandValue()
+                            );
+                        }
+                    }
+                })
                 .build()
                 .generateScreen(parent);
+    }
+
+    private static RequestBroadcastTarget parseBroadcastTarget(String value) {
+        if (value == null || value.isBlank()) {
+            return cachedBroadcastTarget;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT).replace('_', '-');
+        RequestBroadcastTarget parsed = RequestBroadcastTarget.fromUserInput(normalized);
+        return parsed == null ? cachedBroadcastTarget : parsed;
     }
 }

@@ -22,6 +22,22 @@ public class MineClawdConfig {
         }
     }
 
+    public enum DynamicRegistryMode {
+        AUTO("Auto"),
+        ENABLED("Enabled"),
+        DISABLED("Disabled");
+
+        private final String displayName;
+
+        DynamicRegistryMode(String displayName) {
+            this.displayName = displayName;
+        }
+
+        public String displayName() {
+            return displayName;
+        }
+    }
+
     public static final ConfigClassHandler<MineClawdConfig> HANDLER = ConfigClassHandler.createBuilder(MineClawdConfig.class)
             .id(new Identifier("mineclawd", "config"))
             .serializer(config -> GsonConfigSerializerBuilder.create(config)
@@ -68,6 +84,9 @@ public class MineClawdConfig {
 
     @SerialEntry(comment = "Advanced: custom system prompt. Leave blank to use MineClawd default prompt.")
     public String systemPrompt = "";
+
+    @SerialEntry(comment = "Dynamic placeholder registry mode. AUTO enables it in single-player client runtime and disables it on dedicated servers. WARNING: when ENABLED on a dedicated server, joining clients must also install MineClawd.")
+    public DynamicRegistryMode dynamicRegistryMode = DynamicRegistryMode.AUTO;
 
     public static MineClawdConfig get() {
         return HANDLER.instance();
