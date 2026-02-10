@@ -10,6 +10,7 @@
 <p>Mascot: <strong>Yuki</strong></p>
 
 [![Modrinth](https://img.shields.io/badge/Modrinth-RWXmIPlB-00AF5C?style=flat&logo=modrinth)](https://modrinth.com/project/RWXmIPlB)
+[![Wiki](https://img.shields.io/badge/Wiki-Docs-blue?style=flat&logo=bookstack)](https://docs.baimoqilin.com)
 
 </div>
 
@@ -45,34 +46,7 @@ MineClawd is like a magic wand for your world. You don't need to know how to cod
 
 ## Quick Start
 
-1. Install Minecraft `1.20.1`, Fabric Loader, and Java `17+`.
-2. Put these mods in `mods/`: `MineClawd`, `Fabric API`, `KubeJS`, `Architectury API`, `Rhino`, `YetAnotherConfigLib (YACL v3)`, and optionally `Mod Menu`.
-3. Start the game once and join a world/server where you have OP.
-4. Open config with `Mod Menu -> MineClawd -> Configure` or `/mineclawd config`.
-5. Choose provider and fill credentials:
-- OpenAI: `endpoint`, `apiKey`, `model`, `summarizeModel`
-- Vertex AI: `vertexEndpoint`, `vertexApiKey`, `vertexModel`, `vertexSummarizeModel`
-6. Send your first prompt: `/mclawd hello`.
-
-If setup is correct, MineClawd replies in chat and keeps session memory.
-
-## Commands
-
-- `/mineclawd prompt <request>`: send a request to the agent.
-- `/mclawd <request>`: short alias for prompt.
-- `/mineclawd config`: open the config screen.
-- `/mineclawd sessions new`: create and switch to a new session.
-- `/mineclawd new`: alias of `/mineclawd sessions new`.
-- `/mineclawd sessions list`: list saved sessions (id, title, last modified).
-- `/mineclawd sessions resume <session>`: switch active session (`uuid` or `uuid-title`).
-- `/mineclawd sessions remove <session>`: delete a session (`uuid` or `uuid-title`).
-- `/mineclawd persona`: show active persona and available souls.
-- `/mineclawd persona <soul>`: switch persona.
-
-## Storage Paths
-
-- Sessions: `gameDir/mineclawd/sessions/`
-- Souls: `gameDir/mineclawd/souls/`
+Moved to <https://docs.baimoqilin.com>
 
 ## Security
 
