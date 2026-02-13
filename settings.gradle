@@ -1,8 +1,17 @@
 pluginManagement {
     repositories {
         maven { url 'https://maven.fabricmc.net/' }
+        maven { url 'https://maven.architectury.dev/' }
+        maven { url 'https://maven.neoforged.net/releases/' }
+        maven { url 'https://maven.minecraftforge.net/' }
         gradlePluginPortal()
     }
 }
 
 rootProject.name = 'mineclawd'
+
+include('common1201')
+include('fabric1201')
+include('neoforge1201')
+include('common1211')
+include('neoforge1211')

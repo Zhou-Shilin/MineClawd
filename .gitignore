@@ -26,6 +26,10 @@ bin/
 *.ipr
 *.iws
 /.vscode/
+.settings/
+**/.settings/
+*.project
+*.classpath
 .idea/**/workspace.xml
 .idea/**/tasks.xml
 
@@ -38,6 +42,7 @@ bin/
 .DS_Store
 Thumbs.db
 desktop.ini
+nul
 
 # Logs
 *.log

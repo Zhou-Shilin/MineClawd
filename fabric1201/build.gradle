@@ -1,0 +1,99 @@
+plugins {
+    id "com.github.johnrengelman.shadow"
+}
+
+architectury {
+    platformSetupLoomIde()
+    fabric()
+}
+
+loom {
+    accessWidenerPath = file("../common1201/src/main/resources/mineclawd.accesswidener")
+}
+
+configurations {
+    shadowBundle
+    implementation.extendsFrom(shadowBundle)
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${rootProject.minecraft_1201}"
+    mappings "net.fabricmc:yarn:${rootProject.yarn_mappings_1201}:v2"
+
+    modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_1201}"
+    modApi "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_1201}"
+    modApi "dev.architectury:architectury-fabric:${rootProject.architectury_1201}"
+
+    modImplementation "com.terraformersmc:modmenu:${rootProject.modmenu_1201}"
+    modImplementation "dev.isxander:yet-another-config-lib:${rootProject.yacl_1201_fabric}"
+    modImplementation "maven.modrinth:kubejs:${rootProject.kubejs_1201_fabric}"
+    modImplementation "maven.modrinth:rhino:${rootProject.rhino_1201_fabric}"
+    shadowBundle "de.themoep:minedown-adventure:${rootProject.minedown_version}"
+    shadowBundle "net.kyori:adventure-api:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:adventure-key:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:adventure-text-serializer-gson:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:adventure-text-serializer-commons:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:adventure-text-serializer-json:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:examination-api:${rootProject.examination_version}"
+    shadowBundle "net.kyori:examination-string:${rootProject.examination_version}"
+    shadowBundle "net.kyori:option:${rootProject.option_version}"
+
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ["src/main/java", "../common1201/src/main/java", "../commonshared/src/main/java"]
+            exclude "com/mineclawd/MineClawdExpectPlatform.java"
+            exclude "com/mineclawd/MineClawdPlatform.java"
+        }
+        resources {
+            srcDirs = ["src/main/resources", "../common1201/src/main/resources"]
+            exclude "architectury.common.json"
+            exclude "mineclawd.accesswidener"
+        }
+    }
+}
+
+processResources {
+    inputs.property "version", project.version
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+shadowJar {
+    configurations = [project.configurations.shadowBundle]
+    exclude "com/google/gson/**"
+    exclude "META-INF/maven/com.google.code.gson/**"
+    exclude "architectury.common.json"
+    archiveClassifier = "dev-shadow"
+    zip64 true
+}
+
+remapJar {
+    injectAccessWidener = true
+    input.set shadowJar.archiveFile
+    dependsOn shadowJar
+    zip64 true
+}
+
+sourcesJar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+components.java {
+    withVariantsFromConfiguration(project.configurations.shadowRuntimeElements) {
+        skip()
+    }
+}
+
+publishing {
+    publications {
+        mavenFabric1201(MavenPublication) {
+            artifactId = "${rootProject.archives_base_name}-fabric1201"
+            from components.java
+        }
+    }
+}

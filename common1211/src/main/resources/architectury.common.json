@@ -1,0 +1,8 @@
+{
+  "accessWidener": "mineclawd.accesswidener",
+  "injected_interfaces": {
+    "net/minecraft/class_1792$class_1793": [
+      "dev/architectury/extensions/injected/InjectedItemPropertiesExtension"
+    ]
+  }
+}

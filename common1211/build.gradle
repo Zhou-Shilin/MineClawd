@@ -1,0 +1,66 @@
+architectury {
+    common("neoforge")
+}
+
+loom {
+    accessWidenerPath = file("src/main/resources/mineclawd.accesswidener")
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${rootProject.minecraft_1211}"
+    mappings loom.layered {
+        it.mappings("net.fabricmc:yarn:${rootProject.yarn_mappings_1211}:v2")
+        it.mappings("dev.architectury:yarn-mappings-patch-neoforge:${rootProject.yarn_mappings_patch_1211_neoforge}")
+    }
+
+    modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_1201}"
+    modApi "dev.architectury:architectury:${rootProject.architectury_1211}"
+
+    modApi "dev.isxander:yet-another-config-lib:${rootProject.yacl_1211_neoforge}"
+    modApi "maven.modrinth:kubejs:${rootProject.kubejs_1211_neoforge}"
+    modApi "maven.modrinth:rhino:${rootProject.rhino_1211_neoforge}"
+
+    implementation "de.themoep:minedown-adventure:${rootProject.minedown_version}"
+    include "de.themoep:minedown-adventure:${rootProject.minedown_version}"
+
+    implementation "net.kyori:adventure-api:${rootProject.adventure_version}"
+    include "net.kyori:adventure-api:${rootProject.adventure_version}"
+    implementation "net.kyori:adventure-key:${rootProject.adventure_version}"
+    include "net.kyori:adventure-key:${rootProject.adventure_version}"
+
+    implementation "net.kyori:adventure-text-serializer-gson:${rootProject.adventure_version}"
+    include "net.kyori:adventure-text-serializer-gson:${rootProject.adventure_version}"
+    implementation "net.kyori:adventure-text-serializer-commons:${rootProject.adventure_version}"
+    include "net.kyori:adventure-text-serializer-commons:${rootProject.adventure_version}"
+    implementation "net.kyori:adventure-text-serializer-json:${rootProject.adventure_version}"
+    include "net.kyori:adventure-text-serializer-json:${rootProject.adventure_version}"
+
+    implementation "net.kyori:examination-api:${rootProject.examination_version}"
+    include "net.kyori:examination-api:${rootProject.examination_version}"
+    implementation "net.kyori:examination-string:${rootProject.examination_version}"
+    include "net.kyori:examination-string:${rootProject.examination_version}"
+    implementation "net.kyori:option:${rootProject.option_version}"
+    include "net.kyori:option:${rootProject.option_version}"
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ["src/main/java", "../commonshared/src/main/java"]
+            exclude "com/mineclawd/MineClawdExpectPlatform.java"
+            exclude "com/mineclawd/MineClawdPlatform.java"
+        }
+        resources {
+            srcDirs = ["src/main/resources"]
+        }
+    }
+}
+
+publishing {
+    publications {
+        mavenCommon1211(MavenPublication) {
+            artifactId = "${rootProject.archives_base_name}-common1211"
+            from components.java
+        }
+    }
+}

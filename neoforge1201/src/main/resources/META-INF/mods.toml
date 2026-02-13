@@ -1,0 +1,25 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="Apache-2.0"
+
+[[mods]]
+modId="mineclawd"
+version="${version}"
+displayName="MineClawd"
+description='''Bring OpenClaw into Minecraft! The Minecraft Agent that actually do things.'''
+displayURL="https://github.com/Zhou-Shilin/MineClawd"
+logoFile="assets/mineclawd/icon.png"
+
+[[dependencies.mineclawd]]
+modId="forge"
+mandatory=true
+versionRange="[1,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.mineclawd]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+ordering="NONE"
+side="BOTH"

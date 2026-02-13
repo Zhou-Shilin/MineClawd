@@ -1,83 +1,75 @@
 plugins {
-    id 'fabric-loom' version '1.7.4'
-    id 'maven-publish'
+    id "architectury-plugin" version "${architectury_plugin_version}"
+    id "dev.architectury.loom" version "${architectury_loom_version}" apply false
+    id "com.github.johnrengelman.shadow" version "8.1.1" apply false
 }
 
-version = project.mod_version
-group = project.maven_group
-
-base {
-    archivesName = project.archives_base_name
+architectury {
+    minecraft = project.minecraft_1201
 }
 
-repositories {
-    maven {
-        url 'https://maven.fabricmc.net/'
-    }
-    maven {
-        url 'https://maven.isxander.dev/releases'
-    }
-    maven {
-        url 'https://maven.terraformersmc.com/'
-    }
-    maven {
-        url 'https://api.modrinth.com/maven'
-    }
-    maven {
-        url 'https://repo.minebench.de/'
-    }
-    mavenCentral()
-}
+subprojects {
+    apply plugin: "dev.architectury.loom"
 
-dependencies {
-    minecraft "com.mojang:minecraft:${minecraft_version}"
-    mappings "net.fabricmc:yarn:${yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
-    modImplementation "dev.isxander:yet-another-config-lib:${yacl_version}"
-    modImplementation "com.terraformersmc:modmenu:${modmenu_version}"
-    modImplementation "maven.modrinth:kubejs:${kubejs_version}"
-    modImplementation "maven.modrinth:architectury-api:${architectury_version}"
-    modImplementation "maven.modrinth:rhino:${rhino_version}"
-
-    implementation "de.themoep:minedown-adventure:1.7.3-SNAPSHOT"
-    include "de.themoep:minedown-adventure:1.7.3-SNAPSHOT"
-
-    implementation "net.kyori:adventure-api:4.21.0"
-    include "net.kyori:adventure-api:4.21.0"
-    implementation "net.kyori:adventure-key:4.21.0"
-    include "net.kyori:adventure-key:4.21.0"
-
-    implementation "net.kyori:adventure-text-serializer-gson:4.21.0"
-    include "net.kyori:adventure-text-serializer-gson:4.21.0"
-    implementation "net.kyori:adventure-text-serializer-commons:4.21.0"
-    include "net.kyori:adventure-text-serializer-commons:4.21.0"
-    implementation "net.kyori:adventure-text-serializer-json:4.21.0"
-    include "net.kyori:adventure-text-serializer-json:4.21.0"
-    implementation "net.kyori:examination-api:1.3.0"
-    include "net.kyori:examination-api:1.3.0"
-    implementation "net.kyori:examination-string:1.3.0"
-    include "net.kyori:examination-string:1.3.0"
-    implementation "net.kyori:option:1.1.0"
-    include "net.kyori:option:1.1.0"
-}
-
-processResources {
-    inputs.property "version", project.version
-    filesMatching('fabric.mod.json') {
-        expand "version": project.version
+    loom {
+        silentMojangMappingsLicense()
     }
 }
 
-tasks.withType(JavaCompile).configureEach {
-    it.options.release = 17
+allprojects {
+    repositories {
+        maven { url 'https://maven.fabricmc.net/' }
+        maven { url 'https://maven.architectury.dev/' }
+        maven { url 'https://maven.neoforged.net/releases/' }
+        maven { url 'https://maven.minecraftforge.net/' }
+        maven { url 'https://maven.isxander.dev/releases' }
+        maven { url 'https://maven.terraformersmc.com/' }
+        maven { url 'https://thedarkcolour.github.io/KotlinForForge/' }
+        maven { url 'https://api.modrinth.com/maven' }
+        maven { url 'https://repo.minebench.de/' }
+        mavenCentral()
+    }
 }
 
-java {
-    withSourcesJar()
+subprojects {
+    apply plugin: "java"
+    apply plugin: "architectury-plugin"
+    apply plugin: "maven-publish"
+
+    base {
+        archivesName = "${rootProject.archives_base_name}-${project.name}"
+    }
+
+    version = rootProject.mod_version
+    group = rootProject.maven_group
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = "UTF-8"
+        options.release = project.name.contains("1211") ? 21 : 17
+    }
+
+    java {
+        withSourcesJar()
+    }
+
+    tasks.named("jar") {
+        from("${rootProject.rootDir}/LICENSE")
+        from("${rootProject.rootDir}/NOTICE")
+    }
 }
 
-tasks.named("jar") {
-    from("LICENSE")
-    from("NOTICE")
+task collectJars(type: Copy) {
+    subprojects.each {
+        if (it.path.contains("fabric") || it.path.contains("neoforge")) {
+            dependsOn it.tasks.named("remapJar")
+            from it.tasks.named("remapJar").get().archiveFile
+        }
+    }
+    into rootProject.layout.buildDirectory.dir("libs")
+}
+
+task copyToMods(type: Copy) {
+    dependsOn collectJars
+    from rootProject.layout.buildDirectory.dir("libs")
+    into project.findProperty("modsFolder") ?: "build/mods"
 }
