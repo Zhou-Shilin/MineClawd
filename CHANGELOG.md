@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.3.0] - 2026-02-13
+
+### Added
+
+- Architectury multi-loader project layout with dedicated targets for:
+  - Fabric `1.20.1`
+  - Forge `1.20.1`
+  - NeoForge `1.21.1`
+- NeoForge metadata/runtime support using `mods.toml` (1.20.1) and `neoforge.mods.toml` (1.21.1).
+- NeoForge `1.21.1` Yarn compatibility mapping patch for stable Loom remapping.
+- Player join handshake packet for reliable client-mod detection across loaders.
+
+### Changed
+
+- Migrated shared gameplay logic to Architectury common modules while preserving behavior parity.
+- Updated runtime dependencies per platform:
+  - Fabric keeps Mod Menu integration.
+  - Forge/NeoForge use Better Modlist (Mod Menu alternative).
+  - YACL, KubeJS, and Rhino now resolve with loader-specific coordinates.
+- Updated project version to `1.3.0`.
+
+### Fixed
+
+- Fixed false `client mod not detected` on Forge/NeoForge by replacing brittle channel checks with a ready handshake.
+- Fixed `/mineclawd history` desync on NeoForge sessions by updating packet send gating.
+- Fixed rich text book rendering to show formatted history content instead of raw JSON text.
+- Fixed dynamic content sync timing on client join so runtime content and related textures load correctly.
+
 ## [1.2.0] - 2026-02-10
 
 ### Added

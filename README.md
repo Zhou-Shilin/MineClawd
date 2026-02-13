@@ -19,13 +19,19 @@ https://github.com/user-attachments/assets/baf1b5c6-56be-43ee-90d1-097e9fbc75fe
 > [!WARNING]
 > MineClawd is an experimental project. It can execute generated JavaScript in-game. Treat OP access and API credentials as sensitive, and only use this mod in environments you trust.
 
-**MineClawd** is a Fabric mod that brings the power of AI to Minecraft, letting you modify the game using natural language.
+**MineClawd** is an Architectury mod that brings the power of AI to Minecraft, letting you modify the game using natural language.
+
+**Supported platforms (v1.3.0):**
+
+- Fabric `1.20.1`
+- Forge `1.20.1`
+- NeoForge `1.21.1`
 
 ## What it can do
 
 **Turn your words into reality, instantly.**
 
-MineClawd is like a magic wand for your world. You don't need to know how to code—just tell the game what you want, and watch it happen!
+MineClawd is like a magic wand for your world. You do not need to know how to code - just tell the game what you want, and watch it happen!
 
 - **Dream it, Say it, Play it**: Want a sword made of cookies? A helmet that gives you night vision? Or maybe you want it to rain diamonds? Just describe it in the chat!
 
@@ -48,6 +54,20 @@ MineClawd is like a magic wand for your world. You don't need to know how to cod
 
 Moved to <https://docs.baimoqilin.com>
 
+## Build
+
+From the project root:
+
+```bash
+./gradlew collectJars
+```
+
+Release jars are collected into `build/libs/`:
+
+- `mineclawd-fabric1201-1.3.0.jar`
+- `mineclawd-neoforge1201-1.3.0.jar` (Forge `1.20.1`)
+- `mineclawd-neoforge1211-1.3.0.jar` (NeoForge `1.21.1`)
+
 ## Security
 
 - MineClawd can execute generated KubeJS JavaScript and run commands.
@@ -59,13 +79,16 @@ Moved to <https://docs.baimoqilin.com>
 - **Project Author**: Zhou-Shilin (BaimoQilin)
 - **Coding Support**: OpenAI Codex
 - **Libraries and Upstream Projects**:
-- Fabric Loader, Fabric API, and Yarn mappings by FabricMC contributors.
-- KubeJS by the KubeJS maintainers and contributors.
-- YetAnotherConfigLib (YACL) by isXander and contributors.
-- Mod Menu by TerraformersMC contributors.
-- MineDown Adventure by Phoenix616 and contributors.
-- Adventure (Kyori) by kyori and contributors.
-- Gson by Google.
+  - Architectury API and Architectury Loom by the Architectury contributors.
+  - Fabric Loader, Fabric API, and Yarn mappings by FabricMC contributors.
+  - NeoForge and Forge maintainers/contributors.
+  - KubeJS by the KubeJS maintainers and contributors.
+  - YetAnotherConfigLib (YACL) by isXander and contributors.
+  - Mod Menu by TerraformersMC contributors.
+  - Better Modlist contributors.
+  - MineDown Adventure by Phoenix616 and contributors.
+  - Adventure (Kyori) by kyori and contributors.
+  - Gson by Google.
 
 ## License
 
