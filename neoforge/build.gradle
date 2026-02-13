@@ -1,0 +1,120 @@
+plugins {
+    id "com.github.johnrengelman.shadow"
+}
+
+architectury {
+    platformSetupLoomIde()
+    neoForge()
+}
+
+loom {
+    accessWidenerPath = file("../common/src/main/resources/mineclawd.accesswidener")
+}
+
+configurations {
+    shadowBundle
+    implementation.extendsFrom(shadowBundle)
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
+    mappings loom.layered {
+        it.mappings("net.fabricmc:yarn:${rootProject.yarn_mappings}:v2")
+        it.mappings("dev.architectury:yarn-mappings-patch-neoforge:${rootProject.yarn_mappings_patch_neoforge}")
+    }
+
+    neoForge "net.neoforged:neoforge:${rootProject.neoforge_version}"
+    modApi "dev.architectury:architectury-neoforge:${rootProject.architectury_api_version}"
+
+    modImplementation "dev.isxander:yet-another-config-lib:${rootProject.yacl_neoforge_version}"
+    modImplementation "maven.modrinth:better-modlist:${rootProject.better_modlist_neoforge_version}"
+    modImplementation "maven.modrinth:kubejs:${rootProject.kubejs_neoforge_version}"
+    modImplementation "maven.modrinth:rhino:${rootProject.rhino_neoforge_version}"
+
+    shadowBundle "de.themoep:minedown-adventure:${rootProject.minedown_version}"
+    shadowBundle "net.kyori:adventure-api:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:adventure-key:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:adventure-text-serializer-gson:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:adventure-text-serializer-commons:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:adventure-text-serializer-json:${rootProject.adventure_version}"
+    shadowBundle "net.kyori:examination-api:${rootProject.examination_version}"
+    shadowBundle "net.kyori:examination-string:${rootProject.examination_version}"
+    shadowBundle "net.kyori:option:${rootProject.option_version}"
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ["src/main/java", "../common/src/main/java"]
+            exclude "com/mineclawd/MineClawdExpectPlatform.java"
+            exclude "com/mineclawd/MineClawdPlatform.java"
+            exclude "com/mineclawd/MineClawdClient.java"
+            exclude "com/mineclawd/config/MineClawdModMenu.java"
+            exclude "com/mineclawd/dynamic/DynamicContentModelPlugin.java"
+            exclude "com/mineclawd/dynamic/DynamicContentClientRenderer.java"
+        }
+        resources {
+            srcDirs = ["src/main/resources", "../common/src/main/resources"]
+            exclude "architectury.common.json"
+            exclude "mineclawd.accesswidener"
+        }
+    }
+}
+
+processResources {
+    inputs.property "version", project.version
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    filesMatching("META-INF/neoforge.mods.toml") {
+        expand "version": project.version
+    }
+}
+
+shadowJar {
+    configurations = [project.configurations.shadowBundle]
+    exclude "com/google/gson/**"
+    exclude "META-INF/maven/com.google.code.gson/**"
+    exclude "fabric.mod.json"
+    exclude "architectury.common.json"
+    archiveClassifier = "dev-shadow"
+    zip64 true
+}
+
+remapJar {
+    input.set shadowJar.archiveFile
+    dependsOn shadowJar
+    zip64 true
+}
+
+def injectPackMetadataTask = tasks.register("injectPackMetadataIntoRemapJar") {
+    dependsOn remapJar
+    doLast {
+        def packMetadata = file("$buildDir/resources/main/pack.mcmeta")
+        def remappedJar = remapJar.archiveFile.get().asFile
+        if (packMetadata.exists() && remappedJar.exists()) {
+            ant.zip(destfile: remappedJar, update: true) {
+                zipfileset(file: packMetadata, fullpath: "pack.mcmeta")
+            }
+        }
+    }
+}
+
+remapJar.finalizedBy(injectPackMetadataTask)
+
+sourcesJar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+components.java {
+    withVariantsFromConfiguration(project.configurations.shadowRuntimeElements) {
+        skip()
+    }
+}
+
+publishing {
+    publications {
+        mavenNeoForge(MavenPublication) {
+            artifactId = "${rootProject.archives_base_name}-neoforge"
+            from components.java
+        }
+    }
+}

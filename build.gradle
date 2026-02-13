@@ -5,7 +5,7 @@ plugins {
 }
 
 architectury {
-    minecraft = project.minecraft_1201
+    minecraft = project.minecraft_version
 }
 
 subprojects {
@@ -36,6 +36,8 @@ subprojects {
     apply plugin: "architectury-plugin"
     apply plugin: "maven-publish"
 
+    def javaRelease = Integer.parseInt(project.findProperty("java_version")?.toString() ?: "17")
+
     base {
         archivesName = "${rootProject.archives_base_name}-${project.name}"
     }
@@ -45,7 +47,7 @@ subprojects {
 
     tasks.withType(JavaCompile).configureEach {
         options.encoding = "UTF-8"
-        options.release = project.name.contains("1211") ? 21 : 17
+        options.release = javaRelease
     }
 
     java {

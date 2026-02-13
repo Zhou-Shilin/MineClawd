@@ -10,8 +10,6 @@ pluginManagement {
 
 rootProject.name = 'mineclawd'
 
-include('common1201')
-include('fabric1201')
-include('neoforge1201')
-include('common1211')
-include('neoforge1211')
+include('common')
+include('neoforge')
+// include('fabric') // waiting for KubeJS 1.21.1 Fabric support
