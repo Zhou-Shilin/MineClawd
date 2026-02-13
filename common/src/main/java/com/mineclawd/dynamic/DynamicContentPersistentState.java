@@ -3,6 +3,7 @@ package com.mineclawd.dynamic;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.registry.RegistryWrapper;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.datafixer.DataFixTypes;
 import net.minecraft.world.PersistentState;
 import net.minecraft.world.PersistentStateManager;
 
@@ -10,7 +11,11 @@ public final class DynamicContentPersistentState extends PersistentState {
     private static final String STATE_ID = "mineclawd_dynamic_content";
     private static final String PAYLOAD_KEY = "payload";
     private static final PersistentState.Type<DynamicContentPersistentState> TYPE =
-            new PersistentState.Type<>(DynamicContentPersistentState::new, DynamicContentPersistentState::fromNbt);
+            new PersistentState.Type<>(
+                    DynamicContentPersistentState::new,
+                    DynamicContentPersistentState::fromNbt,
+                    DataFixTypes.LEVEL
+            );
 
     private String payload = "";
 
