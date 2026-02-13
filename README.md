@@ -21,11 +21,10 @@ https://github.com/user-attachments/assets/baf1b5c6-56be-43ee-90d1-097e9fbc75fe
 
 **MineClawd** is an Architectury mod that brings the power of AI to Minecraft, letting you modify the game using natural language.
 
-**Supported platforms (v1.3.0):**
+**Supported platforms on branch `1.20.1` (v1.3.0):**
 
 - Fabric `1.20.1`
-- Forge `1.20.1`
-- NeoForge `1.21.1`
+- Forge `1.20.1` (module path `neoforge`)
 
 ## What it can do
 
@@ -64,9 +63,8 @@ From the project root:
 
 Release jars are collected into `build/libs/`:
 
-- `mineclawd-fabric1201-1.3.0.jar`
-- `mineclawd-neoforge1201-1.3.0.jar` (Forge `1.20.1`)
-- `mineclawd-neoforge1211-1.3.0.jar` (NeoForge `1.21.1`)
+- `mineclawd-fabric-1.3.0.jar` (Fabric `1.20.1`)
+- `mineclawd-neoforge-1.3.0.jar` (Forge `1.20.1`)
 
 ## Security
 
