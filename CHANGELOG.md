@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.4.0] - 2026-02-20
+
+### Assistant Overlay GUI
+
+- Added a dedicated top-layer assistant window with draggable position, resizable bounds, minimization to an AssistiveTouch orb, and OP-only default orb visibility.
+- Added real-time streaming output in the overlay with a blinking cursor and a temporary `MineClawd: Thinking...` indicator before the first assistant delta.
+- Added in-window prompt input with text selection, caret movement, copy/paste shortcuts, scroll handling, and send/stop generation controls.
+- Added integrated `Config`, `Sessions`, `Persona`, and `Assets` menu entries in the overlay.
+- Added session list UI with `New Session`, in-place session switching, and session history rendering in the overlay.
+- Added AskUserQuestion rendering inside the overlay and persisted selected answers into message history.
+- Updated role highlighting so `You` and `MineClawd` messages are visually distinct, with one `MineClawd` prefix per assistant turn.
+- Added AssistiveTouch orb icon rendering from `icon-simplified.png` and corrected orb icon centering/sizing behavior.
+- Added client config option `Enable GUI` (default ON). When OFF, MineClawd GUI features degrade to non-GUI behavior while dynamic runtime content support remains available.
+
+### Assets Tracking
+
+- Added persistent asset records managed by tools for categories: `Entities`, `Items/Blocks/Fluids`, `Special Items`, `Commands`, and `Game Mechanics`.
+- Added asset metadata support for summary/script path plus category-specific fields (for example entity UUID/location and content identifiers/NBT).
+- Added `/mineclawd assets` operations with GUI integration for quick actions: teleport (entities), give (items), modify shortcut prompt, and delete shortcut prompt.
+- Added Assets overlay view with category filters (`All` + per-category tabs) and per-entry action controls.
+
+### Runtime Streaming And Controls
+
+- Enabled streaming response handling for both OpenAI and Vertex AI providers, with server-to-client stream event transport.
+- Added `/mineclawd stop` to cancel active generation, including in-flight network cancellation and pending question cleanup.
+- Added overlay stop action during generation via the input-bar button.
+- Fixed session resume behavior after leaving/rejoining world while a request is running so the active session can still be reopened from GUI.
+- Fixed input bleed-through so typing/scrolling in MineClawd overlay no longer leaks into chat, inventory search, or other active screens.
+- Restored `MineClawd finished working for ...` chat status line after generation completes.
+- Added spacing between assistant text segments split by tool calls to keep streamed output readable.
+
 ## [1.3.0] - 2026-02-13
 
 ### Added
