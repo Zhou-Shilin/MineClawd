@@ -8,14 +8,23 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.function.Consumer;
 
 public class OpenAIClient {
     private static final Gson GSON = new Gson();
@@ -37,11 +46,25 @@ public class OpenAIClient {
             List<OpenAIMessage> history,
             @Nullable List<OpenAITool> tools
     ) {
+        return sendMessage(endpoint, apiKey, model, history, tools, null);
+    }
+
+    public CompletableFuture<OpenAIResponse> sendMessage(
+            String endpoint,
+            String apiKey,
+            String model,
+            List<OpenAIMessage> history,
+            @Nullable List<OpenAITool> tools,
+            @Nullable Consumer<String> streamDeltaConsumer
+    ) {
         String baseUrl = normalizeEndpoint(endpoint);
         URI uri = URI.create(baseUrl + "/chat/completions");
 
         JsonObject body = new JsonObject();
         body.addProperty("model", model);
+        if (streamDeltaConsumer != null) {
+            body.addProperty("stream", true);
+        }
 
         JsonArray messages = new JsonArray();
         if (history != null) {
@@ -113,15 +136,159 @@ public class OpenAIClient {
                 .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body)))
                 .build();
 
-        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenApply(response -> {
+        if (streamDeltaConsumer == null) {
+            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenApply(response -> {
+                        int status = response.statusCode();
+                        if (status < 200 || status >= 300) {
+                            String errorMessage = extractErrorMessage(response.body());
+                            throw new RuntimeException("OpenAI API error (" + status + "): " + errorMessage);
+                        }
+                        return parseResponse(response.body());
+                    });
+        }
+
+        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
+                .thenCompose(response -> {
                     int status = response.statusCode();
                     if (status < 200 || status >= 300) {
-                        String errorMessage = extractErrorMessage(response.body());
-                        throw new RuntimeException("OpenAI API error (" + status + "): " + errorMessage);
+                        try (InputStream stream = response.body()) {
+                            String bodyText = readBodyAsString(stream);
+                            String errorMessage = extractErrorMessage(bodyText);
+                            CompletableFuture<OpenAIResponse> failed = new CompletableFuture<>();
+                            failed.completeExceptionally(new RuntimeException("OpenAI API error (" + status + "): " + errorMessage));
+                            return failed;
+                        } catch (IOException exception) {
+                            CompletableFuture<OpenAIResponse> failed = new CompletableFuture<>();
+                            failed.completeExceptionally(exception);
+                            return failed;
+                        }
                     }
-                    return parseResponse(response.body());
+                    return CompletableFuture.supplyAsync(() -> {
+                        try (InputStream stream = response.body()) {
+                            return parseStreamingResponse(stream, streamDeltaConsumer);
+                        } catch (IOException exception) {
+                            throw new CompletionException(exception);
+                        }
+                    });
                 });
+    }
+
+    private static OpenAIResponse parseStreamingResponse(InputStream stream, Consumer<String> streamDeltaConsumer) throws IOException {
+        if (stream == null) {
+            return new OpenAIResponse("", List.of());
+        }
+        StringBuilder fullText = new StringBuilder();
+        Map<Integer, StreamingToolCallBuilder> toolCallBuilders = new TreeMap<>();
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+            StringBuilder dataBlock = new StringBuilder();
+            boolean done = false;
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty()) {
+                    done = consumeStreamDataBlock(dataBlock, fullText, toolCallBuilders, streamDeltaConsumer) || done;
+                    dataBlock.setLength(0);
+                    if (done) {
+                        break;
+                    }
+                    continue;
+                }
+                if (line.startsWith("data:")) {
+                    String data = line.substring(5).trim();
+                    if (!dataBlock.isEmpty()) {
+                        dataBlock.append('\n');
+                    }
+                    dataBlock.append(data);
+                }
+            }
+            if (!done && !dataBlock.isEmpty()) {
+                consumeStreamDataBlock(dataBlock, fullText, toolCallBuilders, streamDeltaConsumer);
+            }
+        }
+
+        List<OpenAIToolCall> toolCalls = new ArrayList<>();
+        for (StreamingToolCallBuilder builder : toolCallBuilders.values()) {
+            if (builder == null) {
+                continue;
+            }
+            toolCalls.add(builder.build());
+        }
+        return new OpenAIResponse(fullText.toString(), toolCalls);
+    }
+
+    private static boolean consumeStreamDataBlock(
+            StringBuilder dataBlock,
+            StringBuilder textBuilder,
+            Map<Integer, StreamingToolCallBuilder> toolCallBuilders,
+            Consumer<String> streamDeltaConsumer
+    ) {
+        if (dataBlock == null || dataBlock.isEmpty()) {
+            return false;
+        }
+        String data = dataBlock.toString().trim();
+        if (data.isEmpty()) {
+            return false;
+        }
+        if ("[DONE]".equals(data)) {
+            return true;
+        }
+
+        JsonObject root;
+        try {
+            root = JsonParser.parseString(data).getAsJsonObject();
+        } catch (Exception ignored) {
+            return false;
+        }
+
+        JsonArray choices = root.has("choices") && root.get("choices").isJsonArray()
+                ? root.getAsJsonArray("choices")
+                : new JsonArray();
+        for (JsonElement choiceElement : choices) {
+            if (!choiceElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject choice = choiceElement.getAsJsonObject();
+            JsonObject delta = choice.has("delta") && choice.get("delta").isJsonObject()
+                    ? choice.getAsJsonObject("delta")
+                    : new JsonObject();
+
+            if (delta.has("content") && !delta.get("content").isJsonNull()) {
+                String contentDelta = extractDeltaText(delta.get("content"));
+                if (!contentDelta.isEmpty()) {
+                    textBuilder.append(contentDelta);
+                    streamDeltaConsumer.accept(contentDelta);
+                }
+            }
+
+            if (delta.has("tool_calls") && delta.get("tool_calls").isJsonArray()) {
+                JsonArray calls = delta.getAsJsonArray("tool_calls");
+                for (int i = 0; i < calls.size(); i++) {
+                    JsonElement callElement = calls.get(i);
+                    if (!callElement.isJsonObject()) {
+                        continue;
+                    }
+                    JsonObject callJson = callElement.getAsJsonObject();
+                    int index = callJson.has("index") && callJson.get("index").isJsonPrimitive()
+                            ? callJson.get("index").getAsInt()
+                            : i;
+                    StreamingToolCallBuilder builder = toolCallBuilders.computeIfAbsent(index, ignored -> new StreamingToolCallBuilder());
+                    if (callJson.has("id") && callJson.get("id").isJsonPrimitive()) {
+                        builder.id = callJson.get("id").getAsString();
+                    }
+                    JsonObject function = callJson.has("function") && callJson.get("function").isJsonObject()
+                            ? callJson.getAsJsonObject("function")
+                            : new JsonObject();
+                    if (function.has("name") && function.get("name").isJsonPrimitive()) {
+                        builder.name = function.get("name").getAsString();
+                    }
+                    if (function.has("arguments") && function.get("arguments").isJsonPrimitive()) {
+                        builder.arguments.append(function.get("arguments").getAsString());
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private static String normalizeEndpoint(String endpoint) {
@@ -171,9 +338,7 @@ public class OpenAIClient {
         }
         if (message.has("content") && !message.get("content").isJsonNull()) {
             JsonElement content = message.get("content");
-            if (content.isJsonPrimitive()) {
-                return content.getAsString();
-            }
+            return extractDeltaText(content);
         }
         return "";
     }
@@ -203,6 +368,34 @@ public class OpenAIClient {
         return toolCalls;
     }
 
+    private static String extractDeltaText(JsonElement content) {
+        if (content == null || content.isJsonNull()) {
+            return "";
+        }
+        if (content.isJsonPrimitive()) {
+            return content.getAsString();
+        }
+        if (!content.isJsonArray()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        JsonArray parts = content.getAsJsonArray();
+        for (JsonElement partElement : parts) {
+            if (!partElement.isJsonObject()) {
+                continue;
+            }
+            JsonObject part = partElement.getAsJsonObject();
+            if (part.has("type") && part.get("type").isJsonPrimitive()
+                    && !"text".equalsIgnoreCase(part.get("type").getAsString())) {
+                continue;
+            }
+            if (part.has("text") && part.get("text").isJsonPrimitive()) {
+                sb.append(part.get("text").getAsString());
+            }
+        }
+        return sb.toString();
+    }
+
     private static String extractErrorMessage(String body) {
         try {
             JsonObject root = JsonParser.parseString(body).getAsJsonObject();
@@ -215,5 +408,23 @@ public class OpenAIClient {
         } catch (Exception ignored) {
         }
         return body == null || body.isBlank() ? "Unknown error" : body;
+    }
+
+    private static String readBodyAsString(InputStream stream) throws IOException {
+        if (stream == null) {
+            return "";
+        }
+        byte[] bytes = stream.readAllBytes();
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static final class StreamingToolCallBuilder {
+        private String id = "";
+        private String name = "";
+        private final StringBuilder arguments = new StringBuilder();
+
+        private OpenAIToolCall build() {
+            return new OpenAIToolCall(id, name, arguments.toString());
+        }
     }
 }

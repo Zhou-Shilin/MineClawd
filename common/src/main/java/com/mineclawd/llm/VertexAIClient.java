@@ -6,6 +6,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -14,8 +18,12 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.function.Consumer;
 
 public class VertexAIClient {
     private static final Gson GSON = new Gson();
@@ -37,6 +45,17 @@ public class VertexAIClient {
             List<VertexAIMessage> history,
             List<VertexAIFunction> tools
     ) {
+        return sendMessage(endpoint, apiKey, model, history, tools, null);
+    }
+
+    public CompletableFuture<VertexAIResponse> sendMessage(
+            String endpoint,
+            String apiKey,
+            String model,
+            List<VertexAIMessage> history,
+            List<VertexAIFunction> tools,
+            Consumer<String> streamDeltaConsumer
+    ) {
         String baseUrl = normalizeEndpoint(endpoint);
         String modelPath = normalizeModel(model);
         if (modelPath.isBlank()) {
@@ -46,7 +65,8 @@ public class VertexAIClient {
         }
 
         String encodedKey = URLEncoder.encode(apiKey == null ? "" : apiKey, StandardCharsets.UTF_8);
-        URI uri = URI.create(baseUrl + "/" + modelPath + ":generateContent?key=" + encodedKey);
+        String route = streamDeltaConsumer == null ? ":generateContent?key=" : ":streamGenerateContent?alt=sse&key=";
+        URI uri = URI.create(baseUrl + "/" + modelPath + route + encodedKey);
 
         JsonObject body = new JsonObject();
         JsonArray contents = new JsonArray();
@@ -100,14 +120,41 @@ public class VertexAIClient {
                 .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body)))
                 .build();
 
-        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenApply(response -> {
+        if (streamDeltaConsumer == null) {
+            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenApply(response -> {
+                        int status = response.statusCode();
+                        if (status < 200 || status >= 300) {
+                            String errorMessage = extractErrorMessage(response.body());
+                            throw new RuntimeException("Vertex AI API error (" + status + "): " + errorMessage);
+                        }
+                        return parseResponse(response.body());
+                    });
+        }
+
+        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
+                .thenCompose(response -> {
                     int status = response.statusCode();
                     if (status < 200 || status >= 300) {
-                        String errorMessage = extractErrorMessage(response.body());
-                        throw new RuntimeException("Vertex AI API error (" + status + "): " + errorMessage);
+                        try (InputStream stream = response.body()) {
+                            String bodyText = readBodyAsString(stream);
+                            String errorMessage = extractErrorMessage(bodyText);
+                            CompletableFuture<VertexAIResponse> failed = new CompletableFuture<>();
+                            failed.completeExceptionally(new RuntimeException("Vertex AI API error (" + status + "): " + errorMessage));
+                            return failed;
+                        } catch (IOException exception) {
+                            CompletableFuture<VertexAIResponse> failed = new CompletableFuture<>();
+                            failed.completeExceptionally(exception);
+                            return failed;
+                        }
                     }
-                    return parseResponse(response.body());
+                    return CompletableFuture.supplyAsync(() -> {
+                        try (InputStream stream = response.body()) {
+                            return parseStreamingResponse(stream, streamDeltaConsumer);
+                        } catch (IOException exception) {
+                            throw new CompletionException(exception);
+                        }
+                    });
                 });
     }
 
@@ -139,6 +186,90 @@ public class VertexAIClient {
     private static VertexAIResponse parseResponse(String body) {
         JsonObject root = JsonParser.parseString(body).getAsJsonObject();
         return extractResponse(root);
+    }
+
+    private static VertexAIResponse parseStreamingResponse(InputStream stream, Consumer<String> streamDeltaConsumer) throws IOException {
+        if (stream == null) {
+            return new VertexAIResponse("", List.of(), VertexAIMessage.modelParts(List.of()));
+        }
+        StringBuilder fullText = new StringBuilder();
+        List<JsonObject> allParts = new ArrayList<>();
+        List<VertexAIToolCall> toolCalls = new ArrayList<>();
+        Set<String> seenToolCalls = new HashSet<>();
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+            StringBuilder dataBlock = new StringBuilder();
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty()) {
+                    consumeStreamingDataBlock(dataBlock, fullText, allParts, toolCalls, seenToolCalls, streamDeltaConsumer);
+                    dataBlock.setLength(0);
+                    continue;
+                }
+                if (line.startsWith("data:")) {
+                    String data = line.substring(5).trim();
+                    if (!dataBlock.isEmpty()) {
+                        dataBlock.append('\n');
+                    }
+                    dataBlock.append(data);
+                }
+            }
+            if (!dataBlock.isEmpty()) {
+                consumeStreamingDataBlock(dataBlock, fullText, allParts, toolCalls, seenToolCalls, streamDeltaConsumer);
+            }
+        }
+
+        VertexAIMessage modelMessage = VertexAIMessage.modelParts(allParts);
+        return new VertexAIResponse(fullText.toString(), toolCalls, modelMessage);
+    }
+
+    private static void consumeStreamingDataBlock(
+            StringBuilder dataBlock,
+            StringBuilder fullText,
+            List<JsonObject> allParts,
+            List<VertexAIToolCall> toolCalls,
+            Set<String> seenToolCalls,
+            Consumer<String> streamDeltaConsumer
+    ) {
+        if (dataBlock == null || dataBlock.isEmpty()) {
+            return;
+        }
+        String data = dataBlock.toString().trim();
+        if (data.isEmpty() || "[DONE]".equals(data)) {
+            return;
+        }
+
+        JsonObject root;
+        try {
+            root = JsonParser.parseString(data).getAsJsonObject();
+        } catch (Exception ignored) {
+            return;
+        }
+
+        VertexAIResponse partial = extractResponse(root);
+        if (partial.text() != null && !partial.text().isEmpty()) {
+            fullText.append(partial.text());
+            streamDeltaConsumer.accept(partial.text());
+        }
+        if (partial.modelMessage() != null && partial.modelMessage().parts() != null) {
+            for (JsonObject part : partial.modelMessage().parts()) {
+                if (part == null) {
+                    continue;
+                }
+                allParts.add(part.deepCopy());
+            }
+        }
+        if (partial.toolCalls() != null) {
+            for (VertexAIToolCall call : partial.toolCalls()) {
+                if (call == null) {
+                    continue;
+                }
+                String signature = (call.name() == null ? "" : call.name()) + "::" + (call.args() == null ? "{}" : call.args().toString());
+                if (seenToolCalls.add(signature)) {
+                    toolCalls.add(call);
+                }
+            }
+        }
     }
 
     private static VertexAIResponse extractResponse(JsonObject root) {
@@ -206,5 +337,13 @@ public class VertexAIClient {
         } catch (Exception ignored) {
         }
         return body == null || body.isBlank() ? "Unknown error" : body;
+    }
+
+    private static String readBodyAsString(InputStream stream) throws IOException {
+        if (stream == null) {
+            return "";
+        }
+        byte[] bytes = stream.readAllBytes();
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 }

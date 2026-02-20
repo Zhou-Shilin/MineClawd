@@ -4,6 +4,12 @@ import de.themoep.minedown.adventure.MineDown;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.mineclawd.assets.AssetsManager;
+import com.mineclawd.assets.AssetsManager.AssetCategory;
+import com.mineclawd.assets.AssetsManager.AssetDraft;
+import com.mineclawd.assets.AssetsManager.AssetRecord;
+import com.mineclawd.assets.AssetsManager.UpsertResult;
+import com.mineclawd.assets.AssetsOverlayPayload;
 import com.mineclawd.config.MineClawdConfig;
 import com.mineclawd.dynamic.DynamicContentRegistry;
 import com.mineclawd.dynamic.DynamicContentToolExecutor;
@@ -29,6 +35,7 @@ import com.mineclawd.question.QuestionResponsePayload;
 import com.mineclawd.session.SessionManager;
 import com.mineclawd.session.SessionManager.SessionData;
 import com.mineclawd.session.SessionManager.SessionSummary;
+import com.mineclawd.session.SessionOverlayPayload;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.suggestion.Suggestions;
@@ -43,6 +50,7 @@ import dev.architectury.platform.Platform;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import net.minecraft.command.CommandSource;
+import net.minecraft.entity.Entity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.item.WrittenBookItem;
@@ -50,10 +58,13 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtList;
 import net.minecraft.nbt.NbtString;
 import net.minecraft.network.PacketByteBuf;
+import net.minecraft.network.RegistryByteBuf;
+import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.ClickEvent;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Style;
@@ -73,6 +84,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CompletableFuture;
@@ -88,14 +100,18 @@ public class MineClawd {
     private static final OpenAIClient OPENAI_CLIENT = new OpenAIClient();
     private static final VertexAIClient VERTEX_CLIENT = new VertexAIClient();
     private static final SessionManager SESSION_MANAGER = new SessionManager();
+    private static final AssetsManager ASSETS_MANAGER = new AssetsManager();
     private static final PersonaManager PERSONA_MANAGER = new PersonaManager();
     private static final PlayerSettingsManager PLAYER_SETTINGS = new PlayerSettingsManager();
     private static final ConcurrentHashMap<String, String> ACTIVE_REQUESTS = new ConcurrentHashMap<>();
+    private static final Set<String> CANCELLED_REQUEST_IDS = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentHashMap<String, CompletableFuture<?>> ACTIVE_NETWORK_REQUESTS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, FailedRequestContext> FAILED_REQUESTS_BY_OWNER = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, PendingQuestion> PENDING_QUESTIONS_BY_ID = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<UUID, PendingQuestion> PENDING_QUESTIONS_BY_PLAYER = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<UUID, PendingQuestion> PENDING_OTHER_TEXT_INPUT = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<UUID, Boolean> CLIENT_MOD_READY = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<UUID, Boolean> CLIENT_GUI_ENABLED = new ConcurrentHashMap<>();
 
     private static final String TOOL_APPLY_INSTANT_SERVER_SCRIPT = "apply-instant-server-script";
     private static final String TOOL_ASK_USER = "ask-user-question";
@@ -114,6 +130,9 @@ public class MineClawd {
     private static final String TOOL_UPDATE_DYNAMIC_BLOCK = "update-dynamic-block";
     private static final String TOOL_UPDATE_DYNAMIC_FLUID = "update-dynamic-fluid";
     private static final String TOOL_UNREGISTER_DYNAMIC_CONTENT = "unregister-dynamic-content";
+    private static final String TOOL_LIST_ASSETS = "list-assets";
+    private static final String TOOL_UPSERT_ASSET_RECORD = "upsert-asset-record";
+    private static final String TOOL_REMOVE_ASSET_RECORD = "remove-asset-record";
     private static final String LEGACY_TOOL_KUBEJS_EVAL = "kubejs_eval";
     private static final int TOOL_LIMIT_MIN = 1;
     private static final int TOOL_LIMIT_MAX = 20;
@@ -127,6 +146,11 @@ public class MineClawd {
     private static final int HISTORY_PAGE_MAX_CHARS = 900;
     private static final int HISTORY_MAX_ENTRIES = 300;
     private static final int HISTORY_PACKET_MAX_CHARS = 262_144;
+    private static final int SESSIONS_PACKET_MAX_CHARS = 262_144;
+    private static final int ASSETS_PACKET_MAX_CHARS = 262_144;
+    private static final int AGENT_STREAM_REQUEST_ID_MAX_CHARS = 64;
+    private static final int AGENT_STREAM_PACKET_MAX_CHARS = 32_767;
+    private static final int AGENT_STREAM_CHUNK_CHARS = 3_000;
     private static final int FAILED_REQUEST_TOKEN_LENGTH = 8;
     private static final long FAILED_REQUEST_TTL_MS = TimeUnit.MINUTES.toMillis(30);
     private static final String HISTORY_BOOK_TITLE = "MineClawd History";
@@ -267,6 +291,21 @@ public class MineClawd {
             "6. For temporary validation setups (for example a test block high above the player), clean up immediately and restore modified blocks.",
             "7. For advanced behavior beyond provided properties, combine this with KubeJS scripts."
     );
+    private static final String ASSET_TRACKING_PROMPT_APPENDIX = String.join("\n",
+            "Asset tracking workflow:",
+            "Use persistent asset records so future sessions can continue previous work without losing references.",
+            "Use tools:",
+            "- `list-assets`: inspect all currently tracked assets.",
+            "- `upsert-asset-record`: create or update an asset record whenever you create/update/remove entities, dynamic content, special items, commands, or game mechanics.",
+            "- `remove-asset-record`: remove a stale asset record when the thing no longer exists.",
+            "Asset categories:",
+            "- `entities`: include `entity_uuid`. Add `entity_dimension`, `entity_x`, `entity_y`, `entity_z` when known.",
+            "- `items_blocks_fluids`: include `content_id` (for example `mineclawd:dynamic_item_001`).",
+            "- `special_items`: include `special_item_id` and `special_item_nbt` if available.",
+            "- `commands`: include command text in `command` and script path if scripted.",
+            "- `game_mechanics`: include clear `summary`, `details`, and script path when applicable.",
+            "Common optional fields for any category: `summary` and `script_path`."
+    );
 
     public static void init() {
         if (INSTANCE != null) {
@@ -288,12 +327,17 @@ public class MineClawd {
                 return;
             }
             server.execute(() -> {
+                    CLIENT_GUI_ENABLED.remove(player.getUuid());
                     DynamicContentRegistry.loadPersistentState(server);
                     instance.sendBroadcastTargetSync(player);
+                    instance.sendAssistiveTouchSync(player);
                     DynamicContentRegistry.syncToPlayer(player);
                 });
         });
-        PlayerEvent.PLAYER_QUIT.register(player -> CLIENT_MOD_READY.remove(player.getUuid()));
+        PlayerEvent.PLAYER_QUIT.register(player -> {
+            CLIENT_MOD_READY.remove(player.getUuid());
+            CLIENT_GUI_ENABLED.remove(player.getUuid());
+        });
         NetworkManager.registerReceiver(NetworkManager.c2s(), MineClawdNetworking.CLIENT_READY,
                 (buf, context) -> {
                     ServerPlayerEntity player = (ServerPlayerEntity) context.getPlayer();
@@ -301,10 +345,37 @@ public class MineClawd {
                     if (server == null) {
                         return;
                     }
+                    boolean guiEnabled = true;
+                    if (buf.isReadable()) {
+                        guiEnabled = buf.readBoolean();
+                    }
+                    boolean finalGuiEnabled = guiEnabled;
                     server.execute(() -> {
                         CLIENT_MOD_READY.put(player.getUuid(), Boolean.TRUE);
+                        CLIENT_GUI_ENABLED.put(player.getUuid(), finalGuiEnabled);
                         instance.sendBroadcastTargetSync(player);
+                        instance.sendAssistiveTouchSync(player);
                         DynamicContentRegistry.syncToPlayer(player);
+                    });
+                });
+        NetworkManager.registerReceiver(NetworkManager.c2s(), MineClawdNetworking.CLIENT_GUI_PREF,
+                (buf, context) -> {
+                    ServerPlayerEntity player = (ServerPlayerEntity) context.getPlayer();
+                    MinecraftServer server = player.getServer();
+                    if (server == null) {
+                        return;
+                    }
+                    boolean guiEnabled = true;
+                    if (buf.isReadable()) {
+                        guiEnabled = buf.readBoolean();
+                    }
+                    boolean finalGuiEnabled = guiEnabled;
+                    server.execute(() -> {
+                        CLIENT_GUI_ENABLED.put(player.getUuid(), finalGuiEnabled);
+                        if (finalGuiEnabled) {
+                            instance.sendBroadcastTargetSync(player);
+                            instance.sendAssistiveTouchSync(player);
+                        }
                     });
                 });
         NetworkManager.registerReceiver(NetworkManager.c2s(), MineClawdNetworking.QUESTION_RESPONSE,
@@ -380,10 +451,37 @@ public class MineClawd {
                                             String sessionRef = StringArgumentType.getString(context, "session");
                                             return removeSession(context.getSource(), sessionRef);
                                         }))))
+                .then(CommandManager.literal("assets")
+                        .executes(context -> listAssets(context.getSource()))
+                        .then(CommandManager.literal("list")
+                                .executes(context -> listAssets(context.getSource())))
+                        .then(CommandManager.literal("teleport")
+                                .then(CommandManager.argument("asset", StringArgumentType.word())
+                                        .suggests((context, builder) -> suggestAssetReference(context.getSource(), builder))
+                                        .executes(context -> {
+                                            String assetRef = StringArgumentType.getString(context, "asset");
+                                            return teleportToAsset(context.getSource(), assetRef);
+                                        })))
+                        .then(CommandManager.literal("give")
+                                .then(CommandManager.argument("asset", StringArgumentType.word())
+                                        .suggests((context, builder) -> suggestAssetReference(context.getSource(), builder))
+                                        .executes(context -> {
+                                            String assetRef = StringArgumentType.getString(context, "asset");
+                                            return giveAssetToPlayer(context.getSource(), assetRef);
+                                        })))
+                        .then(CommandManager.literal("remove-record")
+                                .then(CommandManager.argument("asset", StringArgumentType.word())
+                                        .suggests((context, builder) -> suggestAssetReference(context.getSource(), builder))
+                                        .executes(context -> {
+                                            String assetRef = StringArgumentType.getString(context, "asset");
+                                            return removeAssetRecord(context.getSource(), assetRef);
+                                        }))))
                 .then(CommandManager.literal("history")
                         .executes(context -> showCurrentSessionHistory(context.getSource())))
                 .then(CommandManager.literal("new")
                         .executes(context -> createNewSession(context.getSource())))
+                .then(CommandManager.literal("stop")
+                        .executes(context -> stopActiveRequest(context.getSource())))
                 .then(CommandManager.literal("retry")
                         .then(CommandManager.argument("token", StringArgumentType.word())
                                 .executes(context -> {
@@ -397,6 +495,14 @@ public class MineClawd {
                                 .executes(context -> {
                                     String soul = StringArgumentType.getString(context, "soul");
                                     return switchPersona(context.getSource(), soul);
+                                })))
+                .then(CommandManager.literal("assistivetouch")
+                        .executes(context -> setAssistiveTouch(context.getSource(), null))
+                        .then(CommandManager.argument("state", StringArgumentType.word())
+                                .suggests((context, builder) -> CommandSource.suggestMatching(List.of("toggle", "on", "off", "true", "false"), builder))
+                                .executes(context -> {
+                                    String state = StringArgumentType.getString(context, "state");
+                                    return setAssistiveTouch(context.getSource(), state);
                                 })))
                 .then(CommandManager.literal("choose")
                         .executes(context -> showPendingQuestion(context.getSource()))
@@ -427,8 +533,8 @@ public class MineClawd {
             source.sendError(Text.literal("MineClawd: only players can open the config screen."));
             return 0;
         }
-        if (!canSendToClient(player, MineClawdNetworking.OPEN_CONFIG)) {
-            sendAgentMessage(source, "Client mod not detected. Install MineClawd on your client for GUI config.");
+        if (!canUseGui(player, MineClawdNetworking.OPEN_CONFIG)) {
+            sendAgentMessage(source, "Client GUI unavailable (client mod missing or `Enable GUI` is off).");
             sendAgentMessage(source, "You can still configure from server commands: `/mineclawd config <key> <value>`.");
             sendAgentMessage(source, "Available keys: `" + String.join("`, `", CONFIG_KEYS) + "`.");
             return 1;
@@ -444,13 +550,26 @@ public class MineClawd {
         if (player == null) {
             return;
         }
-        if (!canSendToClient(player, MineClawdNetworking.SYNC_BROADCAST_TARGET)) {
+        if (!canUseGui(player, MineClawdNetworking.SYNC_BROADCAST_TARGET)) {
             return;
         }
         RequestBroadcastTarget target = PLAYER_SETTINGS.getRequestBroadcastTarget(player.getUuidAsString());
         var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeString(target.commandValue());
         NetworkManager.sendToPlayer(player, MineClawdNetworking.SYNC_BROADCAST_TARGET, payload);
+    }
+
+    private void sendAssistiveTouchSync(ServerPlayerEntity player) {
+        if (player == null) {
+            return;
+        }
+        if (!canUseGui(player, MineClawdNetworking.SYNC_ASSISTIVE_TOUCH)) {
+            return;
+        }
+        boolean enabled = PLAYER_SETTINGS.isAssistiveTouchEnabled(player.getUuidAsString());
+        var payload = new RegistryByteBuf(Unpooled.buffer(), player.getServerWorld().getRegistryManager());
+        payload.writeBoolean(enabled);
+        NetworkManager.sendToPlayer(player, MineClawdNetworking.SYNC_ASSISTIVE_TOUCH, payload);
     }
 
     private CompletableFuture<Suggestions> suggestConfigKey(ServerCommandSource source, SuggestionsBuilder builder) {
@@ -754,7 +873,49 @@ public class MineClawd {
             source.sendError(Text.literal("MineClawd: failed to create session: " + exception.getMessage()));
             return 0;
         }
+        if (source.getEntity() instanceof ServerPlayerEntity player
+                && canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_SESSIONS)) {
+            sendSessionsOverlayToPlayer(source, player, false, session.id());
+            return 1;
+        }
         sendAgentMessage(source, "Started new session `" + session.commandToken() + "`.");
+        return 1;
+    }
+
+    private int stopActiveRequest(ServerCommandSource source) {
+        if (!isOp(source)) {
+            source.sendError(Text.literal("MineClawd: only OP users can run this command."));
+            return 0;
+        }
+        String ownerKey = sessionOwnerKey(source);
+        String requestId = ACTIVE_REQUESTS.remove(ownerKey);
+        if (requestId == null || requestId.isBlank()) {
+            sendAgentMessage(source, "No running request to stop.");
+            return 0;
+        }
+
+        CANCELLED_REQUEST_IDS.add(requestId);
+        CompletableFuture<?> inFlight = ACTIVE_NETWORK_REQUESTS.remove(requestId);
+        if (inFlight != null) {
+            inFlight.cancel(true);
+        }
+
+        if (source.getEntity() instanceof ServerPlayerEntity player) {
+            PendingQuestion pending = PENDING_QUESTIONS_BY_PLAYER.remove(player.getUuid());
+            if (pending != null) {
+                PENDING_QUESTIONS_BY_ID.remove(pending.id(), pending);
+                completePendingQuestion(pending, "SKIPPED: Request was stopped by user.");
+            }
+        }
+
+        if (source.getEntity() instanceof ServerPlayerEntity player
+                && canUseAssistiveOverlay(player, MineClawdNetworking.AGENT_STREAM_EVENT)) {
+            sendAgentStreamPacket(player, requestId, AgentStreamEventType.ERROR, "Generation stopped by user.");
+            sendAgentStreamPacket(player, requestId, AgentStreamEventType.DONE, "");
+        }
+
+        sendTaskStatus(source, false);
+        sendAgentMessage(source, "Stopped the running request.");
         return 1;
     }
 
@@ -763,6 +924,12 @@ public class MineClawd {
             source.sendError(Text.literal("MineClawd: only OP users can run this command."));
             return 0;
         }
+        if (source.getEntity() instanceof ServerPlayerEntity player
+                && canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_SESSIONS)) {
+            sendSessionsOverlayToPlayer(source, player, true, null);
+            return 1;
+        }
+
         List<SessionSummary> sessions = SESSION_MANAGER.listSessions(sessionOwnerKey(source));
         if (sessions.isEmpty()) {
             sendAgentMessage(source, "No sessions yet. Use `/mineclawd sessions new` to create one.");
@@ -780,6 +947,494 @@ public class MineClawd {
             );
         }
         return 1;
+    }
+
+    private int listAssets(ServerCommandSource source) {
+        if (!isOp(source)) {
+            source.sendError(Text.literal("MineClawd: only OP users can run this command."));
+            return 0;
+        }
+        if (source.getEntity() instanceof ServerPlayerEntity player
+                && canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_ASSETS)) {
+            sendAssetsOverlayToPlayer(source, player, true);
+            return 1;
+        }
+
+        List<AssetRecord> assets = ASSETS_MANAGER.list(sessionOwnerKey(source));
+        if (assets.isEmpty()) {
+            sendAgentMessage(source, "No assets tracked yet. Agent should use `upsert-asset-record` after creating content.");
+            return 1;
+        }
+
+        sendAgentMessage(source, "Assets (`" + assets.size() + "` total):");
+        for (AssetRecord asset : assets) {
+            if (asset == null) {
+                continue;
+            }
+            String summary = asset.summary().isBlank() ? "" : " - " + asset.summary();
+            sendAgentMessage(
+                    source,
+                    "`" + asset.id() + "` [" + asset.category().displayName() + "] " + asset.name() + summary
+            );
+        }
+        sendAgentMessage(source, "Actions: `/mineclawd assets teleport <asset>`, `/mineclawd assets give <asset>`, `/mineclawd assets remove-record <asset>`.");
+        return 1;
+    }
+
+    private void sendAssetsOverlayToPlayer(ServerCommandSource source, ServerPlayerEntity player, boolean openUi) {
+        if (source == null || player == null) {
+            return;
+        }
+        if (!canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_ASSETS)) {
+            return;
+        }
+
+        String ownerKey = sessionOwnerKey(source);
+        List<AssetRecord> assets = ASSETS_MANAGER.list(ownerKey);
+        List<AssetsOverlayPayload.AssetItem> payloadAssets = new ArrayList<>();
+        for (AssetRecord asset : assets) {
+            if (asset == null) {
+                continue;
+            }
+            payloadAssets.add(new AssetsOverlayPayload.AssetItem(
+                    asset.id(),
+                    asset.category().id(),
+                    asset.name(),
+                    asset.summary(),
+                    asset.scriptPath(),
+                    asset.details(),
+                    asset.contentId(),
+                    asset.specialItemId(),
+                    asset.specialItemNbt(),
+                    asset.command(),
+                    asset.entityUuid(),
+                    asset.entityDimension(),
+                    asset.entityX(),
+                    asset.entityY(),
+                    asset.entityZ(),
+                    asset.sessionId(),
+                    asset.updatedAtEpochMilli()
+            ));
+        }
+
+        SessionData activeSession = SESSION_MANAGER.loadActiveSession(ownerKey);
+        String activeSessionId = activeSession == null ? "" : activeSession.id();
+        String activePersona = PERSONA_MANAGER.getActiveSoulName(ownerKey);
+        List<String> personas = PERSONA_MANAGER.listSoulNames();
+
+        String payloadString = buildAssetsOverlayPayloadJson(
+                openUi,
+                activeSessionId,
+                activePersona,
+                personas,
+                payloadAssets
+        );
+        var payload = new RegistryByteBuf(Unpooled.buffer(), player.getServerWorld().getRegistryManager());
+        payload.writeString(payloadString, ASSETS_PACKET_MAX_CHARS);
+        NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_ASSETS, payload);
+    }
+
+    private String buildAssetsOverlayPayloadJson(
+            boolean openUi,
+            String activeSessionId,
+            String activePersona,
+            List<String> personas,
+            List<AssetsOverlayPayload.AssetItem> assets
+    ) {
+        List<AssetsOverlayPayload.AssetItem> mutableAssets = new ArrayList<>(assets == null ? List.of() : assets);
+        String payloadString = new AssetsOverlayPayload(
+                openUi,
+                activeSessionId,
+                activePersona,
+                personas,
+                mutableAssets
+        ).toJson();
+        while (payloadString.length() > ASSETS_PACKET_MAX_CHARS && !mutableAssets.isEmpty()) {
+            mutableAssets.remove(mutableAssets.size() - 1);
+            payloadString = new AssetsOverlayPayload(
+                    openUi,
+                    activeSessionId,
+                    activePersona,
+                    personas,
+                    mutableAssets
+            ).toJson();
+        }
+        if (payloadString.length() <= ASSETS_PACKET_MAX_CHARS) {
+            return payloadString;
+        }
+        return new AssetsOverlayPayload(
+                openUi,
+                activeSessionId,
+                activePersona,
+                List.of(),
+                List.of()
+        ).toJson();
+    }
+
+    private CompletableFuture<Suggestions> suggestAssetReference(ServerCommandSource source, SuggestionsBuilder builder) {
+        if (source == null || !isOp(source)) {
+            return Suggestions.empty();
+        }
+        List<AssetRecord> assets = ASSETS_MANAGER.list(sessionOwnerKey(source));
+        if (assets.isEmpty()) {
+            return Suggestions.empty();
+        }
+        List<String> candidates = new ArrayList<>(assets.size() * 2);
+        for (AssetRecord asset : assets) {
+            if (asset == null) {
+                continue;
+            }
+            if (!asset.id().isBlank()) {
+                candidates.add(asset.id());
+            }
+            if (!asset.name().isBlank()) {
+                candidates.add(asset.name());
+            }
+        }
+        return CommandSource.suggestMatching(candidates, builder);
+    }
+
+    private int removeAssetRecord(ServerCommandSource source, String reference) {
+        if (!isOp(source)) {
+            source.sendError(Text.literal("MineClawd: only OP users can run this command."));
+            return 0;
+        }
+        if (reference == null || reference.isBlank()) {
+            source.sendError(Text.literal("MineClawd: asset reference is required."));
+            return 0;
+        }
+        String ownerKey = sessionOwnerKey(source);
+        AssetRecord record = ASSETS_MANAGER.resolve(ownerKey, reference);
+        if (record == null) {
+            source.sendError(Text.literal("MineClawd: asset not found. Use `/mineclawd assets` to inspect ids."));
+            return 0;
+        }
+        if (!ASSETS_MANAGER.remove(ownerKey, record.id())) {
+            source.sendError(Text.literal("MineClawd: failed to remove asset record."));
+            return 0;
+        }
+        if (source.getEntity() instanceof ServerPlayerEntity player
+                && canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_ASSETS)) {
+            sendAssetsOverlayToPlayer(source, player, true);
+        } else {
+            sendAgentMessage(source, "Removed asset record `" + record.id() + "`.");
+        }
+        return 1;
+    }
+
+    private int teleportToAsset(ServerCommandSource source, String reference) {
+        if (!isOp(source)) {
+            source.sendError(Text.literal("MineClawd: only OP users can run this command."));
+            return 0;
+        }
+        if (!(source.getEntity() instanceof ServerPlayerEntity player)) {
+            source.sendError(Text.literal("MineClawd: this command must be executed by a player."));
+            return 0;
+        }
+        String ownerKey = sessionOwnerKey(source);
+        AssetRecord record = ASSETS_MANAGER.resolve(ownerKey, reference);
+        if (record == null) {
+            source.sendError(Text.literal("MineClawd: asset not found. Use `/mineclawd assets` to inspect ids."));
+            return 0;
+        }
+        if (record.category() != AssetCategory.ENTITIES) {
+            source.sendError(Text.literal("MineClawd: teleport is only available for `Entities` assets."));
+            return 0;
+        }
+        if (record.entityUuid().isBlank()) {
+            source.sendError(Text.literal("MineClawd: this asset does not have a valid `entity_uuid`."));
+            return 0;
+        }
+
+        UUID uuid;
+        try {
+            uuid = UUID.fromString(record.entityUuid());
+        } catch (Exception exception) {
+            source.sendError(Text.literal("MineClawd: invalid entity UUID stored in asset record."));
+            return 0;
+        }
+
+        Entity target = null;
+        ServerWorld targetWorld = null;
+        if (source.getServer() != null) {
+            for (ServerWorld world : source.getServer().getWorlds()) {
+                Entity found = world.getEntity(uuid);
+                if (found != null) {
+                    target = found;
+                    targetWorld = world;
+                    break;
+                }
+            }
+        }
+
+        if (target == null || targetWorld == null) {
+            source.sendError(Text.literal("MineClawd: entity `" + record.entityUuid() + "` was not found in loaded worlds."));
+            return 0;
+        }
+
+        String worldId = targetWorld.getRegistryKey().getValue().toString();
+        String command = String.format(
+                Locale.ROOT,
+                "execute in %s run tp %s %.3f %.3f %.3f",
+                worldId,
+                player.getName().getString(),
+                target.getX(),
+                target.getY(),
+                target.getZ()
+        );
+        ToolExecutionResult result = KubeJsToolExecutor.executeCommand(source, command);
+        if (!result.success()) {
+            source.sendError(Text.literal("MineClawd: teleport failed. " + result.output()));
+            return 0;
+        }
+
+        UpsertResult upsert = ASSETS_MANAGER.upsert(ownerKey, new AssetDraft(
+                record.id(),
+                record.category().id(),
+                record.name(),
+                record.summary(),
+                record.scriptPath(),
+                record.details(),
+                record.contentId(),
+                record.specialItemId(),
+                record.specialItemNbt(),
+                record.command(),
+                record.entityUuid(),
+                worldId,
+                target.getX(),
+                target.getY(),
+                target.getZ(),
+                record.sessionId()
+        ));
+        if (!upsert.success()) {
+            LOGGER.debug("Failed to refresh entity position for asset {}: {}", record.id(), upsert.message());
+        }
+
+        sendAgentMessage(source, "Teleported to `" + record.name() + "` (`" + record.id() + "`).");
+        return 1;
+    }
+
+    private int giveAssetToPlayer(ServerCommandSource source, String reference) {
+        if (!isOp(source)) {
+            source.sendError(Text.literal("MineClawd: only OP users can run this command."));
+            return 0;
+        }
+        if (!(source.getEntity() instanceof ServerPlayerEntity player)) {
+            source.sendError(Text.literal("MineClawd: this command must be executed by a player."));
+            return 0;
+        }
+        String ownerKey = sessionOwnerKey(source);
+        AssetRecord record = ASSETS_MANAGER.resolve(ownerKey, reference);
+        if (record == null) {
+            source.sendError(Text.literal("MineClawd: asset not found. Use `/mineclawd assets` to inspect ids."));
+            return 0;
+        }
+
+        String itemId;
+        String itemSuffix = "";
+        if (record.category() == AssetCategory.ITEMS_BLOCKS_FLUIDS) {
+            itemId = resolveGiveItemId(record.contentId());
+            if (itemId.isBlank()) {
+                source.sendError(Text.literal("MineClawd: this asset does not have a valid `content_id` item."));
+                return 0;
+            }
+        } else if (record.category() == AssetCategory.SPECIAL_ITEMS) {
+            itemId = resolveGiveItemId(record.specialItemId());
+            if (itemId.isBlank()) {
+                source.sendError(Text.literal("MineClawd: this special item asset does not have a valid `special_item_id`."));
+                return 0;
+            }
+            itemSuffix = record.specialItemNbt();
+        } else {
+            source.sendError(Text.literal("MineClawd: give is only available for `Items/Blocks/Fluids` or `Special Items` assets."));
+            return 0;
+        }
+
+        ToolExecutionResult result = runGiveItemCommand(source, player, itemId, itemSuffix);
+        if (!result.success()) {
+            source.sendError(Text.literal("MineClawd: give failed. " + result.output()));
+            return 0;
+        }
+        sendAgentMessage(source, "Gave `" + record.name() + "` to `" + player.getName().getString() + "`.");
+        return 1;
+    }
+
+    private ToolExecutionResult runGiveItemCommand(
+            ServerCommandSource source,
+            ServerPlayerEntity player,
+            String itemId,
+            String suffix
+    ) {
+        if (source == null || player == null || itemId == null || itemId.isBlank()) {
+            return new ToolExecutionResult(false, "invalid give command input");
+        }
+        String playerName = player.getName().getString();
+        String safeSuffix = suffix == null ? "" : suffix.trim();
+        if (!safeSuffix.isBlank()) {
+            ToolExecutionResult withSuffix = KubeJsToolExecutor.executeCommand(
+                    source,
+                    "give " + playerName + " " + itemId + safeSuffix + " 1"
+            );
+            if (withSuffix.success()) {
+                return withSuffix;
+            }
+        }
+        return KubeJsToolExecutor.executeCommand(source, "give " + playerName + " " + itemId + " 1");
+    }
+
+    private String resolveGiveItemId(String rawId) {
+        if (rawId == null || rawId.isBlank()) {
+            return "";
+        }
+        String normalized = rawId.trim().toLowerCase(Locale.ROOT);
+        Identifier id = Identifier.tryParse(normalized);
+        if (id == null && !normalized.contains(":")) {
+            Identifier mineclawdId = Identifier.tryParse(MOD_ID + ":" + normalized);
+            if (mineclawdId != null && Registries.ITEM.containsId(mineclawdId)) {
+                id = mineclawdId;
+            }
+            if (id == null) {
+                Identifier vanillaId = Identifier.tryParse("minecraft:" + normalized);
+                if (vanillaId != null && Registries.ITEM.containsId(vanillaId)) {
+                    id = vanillaId;
+                }
+            }
+        }
+        if (id != null && Registries.ITEM.containsId(id)) {
+            return id.toString();
+        }
+        if (id == null || !MOD_ID.equals(id.getNamespace())) {
+            return "";
+        }
+        String path = id.getPath();
+        if (!path.startsWith("dynamic_fluid_") || path.startsWith("dynamic_fluid_bucket_")) {
+            return "";
+        }
+        String suffix = path.substring("dynamic_fluid_".length());
+        Identifier bucket = Identifier.tryParse(MOD_ID + ":dynamic_fluid_bucket_" + suffix);
+        if (bucket != null && Registries.ITEM.containsId(bucket)) {
+            return bucket.toString();
+        }
+        return "";
+    }
+
+    private void sendSessionsOverlayToPlayer(
+            ServerCommandSource source,
+            ServerPlayerEntity player,
+            boolean openUi,
+            String preferredSessionRef
+    ) {
+        if (source == null || player == null) {
+            return;
+        }
+        if (!canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_SESSIONS)) {
+            return;
+        }
+
+        String ownerKey = sessionOwnerKey(source);
+        List<SessionSummary> summaries = SESSION_MANAGER.listSessions(ownerKey);
+        SessionData activeSession = SESSION_MANAGER.loadActiveSession(ownerKey);
+        SessionData selectedSession = preferredSessionRef == null || preferredSessionRef.isBlank()
+                ? activeSession
+                : SESSION_MANAGER.resolve(ownerKey, preferredSessionRef);
+        if (selectedSession == null) {
+            selectedSession = activeSession;
+        }
+        if (selectedSession == null && !summaries.isEmpty()) {
+            selectedSession = SESSION_MANAGER.resolve(ownerKey, summaries.get(0).id());
+        }
+
+        List<SessionOverlayPayload.SessionItem> sessionItems = new ArrayList<>();
+        for (SessionSummary summary : summaries) {
+            if (summary == null) {
+                continue;
+            }
+            sessionItems.add(new SessionOverlayPayload.SessionItem(
+                    summary.id(),
+                    summary.title(),
+                    summary.token(),
+                    summary.updatedAtEpochMilli(),
+                    summary.active()
+            ));
+        }
+
+        List<SessionOverlayPayload.HistoryItem> historyItems = new ArrayList<>();
+        for (HistoryEntry entry : collectVisibleHistoryEntries(selectedSession)) {
+            if (entry == null || entry.content() == null || entry.content().isBlank()) {
+                continue;
+            }
+            historyItems.add(new SessionOverlayPayload.HistoryItem(entry.assistant(), entry.content()));
+        }
+
+        String activeSessionId = selectedSession == null ? "" : selectedSession.id();
+        String activePersona = PERSONA_MANAGER.getActiveSoulName(ownerKey);
+        List<String> personas = PERSONA_MANAGER.listSoulNames();
+        String payloadString = buildSessionsOverlayPayloadJson(
+                openUi,
+                activeSessionId,
+                activePersona,
+                personas,
+                sessionItems,
+                historyItems
+        );
+
+        var payload = new RegistryByteBuf(Unpooled.buffer(), player.getServerWorld().getRegistryManager());
+        payload.writeString(payloadString, SESSIONS_PACKET_MAX_CHARS);
+        NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_SESSIONS, payload);
+    }
+
+    private String buildSessionsOverlayPayloadJson(
+            boolean openUi,
+            String activeSessionId,
+            String activePersona,
+            List<String> personas,
+            List<SessionOverlayPayload.SessionItem> sessionItems,
+            List<SessionOverlayPayload.HistoryItem> historyItems
+    ) {
+        List<SessionOverlayPayload.HistoryItem> mutableHistory = new ArrayList<>(
+                historyItems == null ? List.of() : historyItems
+        );
+        String payloadString = new SessionOverlayPayload(
+                openUi,
+                activeSessionId,
+                activePersona,
+                personas,
+                sessionItems,
+                mutableHistory
+        ).toJson();
+        while (payloadString.length() > SESSIONS_PACKET_MAX_CHARS && mutableHistory.size() > 1) {
+            mutableHistory.remove(0);
+            payloadString = new SessionOverlayPayload(
+                    openUi,
+                    activeSessionId,
+                    activePersona,
+                    personas,
+                    sessionItems,
+                    mutableHistory
+            ).toJson();
+        }
+        if (payloadString.length() <= SESSIONS_PACKET_MAX_CHARS) {
+            return payloadString;
+        }
+        payloadString = new SessionOverlayPayload(
+                openUi,
+                activeSessionId,
+                activePersona,
+                personas,
+                sessionItems,
+                List.of(new SessionOverlayPayload.HistoryItem(true, "History is too large to transfer in one payload."))
+        ).toJson();
+        if (payloadString.length() <= SESSIONS_PACKET_MAX_CHARS) {
+            return payloadString;
+        }
+        return new SessionOverlayPayload(
+                openUi,
+                activeSessionId,
+                activePersona,
+                List.of(),
+                List.of(),
+                List.of()
+        ).toJson();
     }
 
     private CompletableFuture<Suggestions> suggestSessionReference(ServerCommandSource source, SuggestionsBuilder builder) {
@@ -805,14 +1460,34 @@ public class MineClawd {
         }
         String ownerKey = sessionOwnerKey(source);
         if (ACTIVE_REQUESTS.containsKey(ownerKey)) {
-            source.sendError(Text.literal("MineClawd: cannot switch sessions while a request is running."));
-            return 0;
+            SessionData requested = SESSION_MANAGER.resolve(ownerKey, sessionRef);
+            if (requested == null) {
+                source.sendError(Text.literal("MineClawd: session not found. Use /mineclawd sessions list."));
+                return 0;
+            }
+            SessionData active = SESSION_MANAGER.loadActiveSession(ownerKey);
+            if (active == null || !active.id().equalsIgnoreCase(requested.id())) {
+                source.sendError(Text.literal("MineClawd: cannot switch sessions while a request is running."));
+                return 0;
+            }
+            if (source.getEntity() instanceof ServerPlayerEntity player
+                    && canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_SESSIONS)) {
+                sendSessionsOverlayToPlayer(source, player, false, requested.id());
+                return 1;
+            }
+            sendAgentMessage(source, "MineClawd is still running in this session.");
+            return 1;
         }
 
         SessionData session = SESSION_MANAGER.resumeSession(ownerKey, sessionRef);
         if (session == null) {
             source.sendError(Text.literal("MineClawd: session not found. Use /mineclawd sessions list."));
             return 0;
+        }
+        if (source.getEntity() instanceof ServerPlayerEntity player
+                && canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_SESSIONS)) {
+            sendSessionsOverlayToPlayer(source, player, false, session.id());
+            return 1;
         }
         sendAgentMessage(source, "Resumed session `" + session.commandToken() + "`.");
         return 1;
@@ -1069,7 +1744,44 @@ public class MineClawd {
             source.sendError(Text.literal("MineClawd: failed to switch persona."));
             return 0;
         }
+        if (source.getEntity() instanceof ServerPlayerEntity player
+                && canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_SESSIONS)) {
+            sendSessionsOverlayToPlayer(source, player, false, null);
+            return 1;
+        }
         sendAgentMessage(source, "Switched persona to `" + resolved + "`.");
+        return 1;
+    }
+
+    private int setAssistiveTouch(ServerCommandSource source, String rawState) {
+        if (!isOp(source)) {
+            source.sendError(Text.literal("MineClawd: only OP users can run this command."));
+            return 0;
+        }
+        if (!(source.getEntity() instanceof ServerPlayerEntity player)) {
+            source.sendError(Text.literal("MineClawd: this command must be executed by a player."));
+            return 0;
+        }
+
+        boolean current = PLAYER_SETTINGS.isAssistiveTouchEnabled(player.getUuidAsString());
+        Boolean desired = null;
+        if (rawState != null && !rawState.isBlank()) {
+            String normalized = rawState.trim().toLowerCase(Locale.ROOT);
+            if ("toggle".equals(normalized) || "switch".equals(normalized)) {
+                desired = !current;
+            } else {
+                desired = parseBooleanValue(normalized);
+            }
+            if (desired == null) {
+                source.sendError(Text.literal("MineClawd: invalid value. Use toggle/on/off/true/false."));
+                return 0;
+            }
+        }
+
+        boolean next = desired == null ? !current : desired;
+        PLAYER_SETTINGS.setAssistiveTouchEnabled(player.getUuidAsString(), next);
+        sendAssistiveTouchSync(player);
+        sendAgentMessage(source, "AssistiveTouch is now `" + (next ? "enabled" : "disabled") + "`.");
         return 1;
     }
 
@@ -1209,7 +1921,9 @@ public class MineClawd {
                 sessionId,
                 request,
                 requestOptions.sessionBacked(),
-                requestOptions.interactiveErrorActions()
+                requestOptions.interactiveErrorActions(),
+                source.getEntity() instanceof ServerPlayerEntity requester
+                        && canUseAssistiveOverlay(requester, MineClawdNetworking.AGENT_STREAM_EVENT)
         );
         debugLog(runtime, "Request from %s session=%s: %s", ownerKey, sessionId, request);
         debugLog(runtime, "Request id: %s", requestId);
@@ -1219,6 +1933,9 @@ public class MineClawd {
         }
         sendPromptEcho(source, request);
         sendTaskStatus(source, true);
+        if (runtime.clientStreamEnabled()) {
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.START, buildStreamStartPayload(runtime.sessionId(), request));
+        }
         try {
             String systemPrompt = buildSystemPrompt(config, ownerKey, runtime.dynamicRegistryEnabled(), session);
             if (provider == MineClawdConfig.LlmProvider.OPENAI) {
@@ -1252,8 +1969,14 @@ public class MineClawd {
                 runVertexAgent(source, session, history, 0, 0, new ToolLoopState("", "", 0), runtime);
             }
         } catch (Exception e) {
+            if (runtime.clientStreamEnabled()) {
+                sendAgentStreamEvent(source, runtime, AgentStreamEventType.ERROR, "MineClawd failed to start request: " + e.getMessage());
+                sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
+            } else {
+                source.sendError(Text.literal("MineClawd: failed to start request: " + e.getMessage()));
+            }
+            sendTaskStatus(source, false);
             finishActiveRequest(runtime);
-            source.sendError(Text.literal("MineClawd: failed to start request: " + e.getMessage()));
             return 0;
         }
 
@@ -1315,7 +2038,7 @@ public class MineClawd {
         String requesterName = source.getName();
         String text = started
                 ? "MineClawd started working for " + requesterName + "..."
-                : "MineClawd finished task requested by " + requesterName + ".";
+                : "MineClawd finished working for " + requesterName + ".";
         MutableText line = Text.literal(text).formatted(Formatting.GRAY);
 
         if (!(source.getEntity() instanceof ServerPlayerEntity requester) || source.getServer() == null) {
@@ -1347,6 +2070,111 @@ public class MineClawd {
                 player.sendMessage(line.copy(), false);
             }
         }
+    }
+
+    private void queueAgentStreamDelta(ServerCommandSource source, AgentRuntime runtime, String chunk) {
+        if (source == null || runtime == null || !runtime.clientStreamEnabled() || chunk == null || chunk.isEmpty()) {
+            return;
+        }
+        if (isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
+        MinecraftServer server = source.getServer();
+        if (server == null) {
+            return;
+        }
+        server.execute(() -> {
+            if (isRuntimeInactive(runtime)) {
+                cleanupInactiveRuntime(runtime);
+                return;
+            }
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.DELTA, chunk);
+        });
+    }
+
+    private String buildStreamStartPayload(String sessionId, String request) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("sessionId", sessionId == null ? "" : sessionId);
+        String normalizedRequest = request == null ? "" : request.replace('\r', ' ').replace('\n', ' ').trim();
+        if (normalizedRequest.length() > 600) {
+            normalizedRequest = normalizedRequest.substring(0, 600).trim();
+        }
+        payload.addProperty("request", normalizedRequest);
+        return payload.toString();
+    }
+
+    private void sendAgentStreamEvent(
+            ServerCommandSource source,
+            AgentRuntime runtime,
+            AgentStreamEventType type,
+            String payload
+    ) {
+        if (source == null || runtime == null || type == null || !runtime.clientStreamEnabled()) {
+            return;
+        }
+        if (type != AgentStreamEventType.START && isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
+        if (!(source.getEntity() instanceof ServerPlayerEntity player)) {
+            return;
+        }
+        if (!canUseAssistiveOverlay(player, MineClawdNetworking.AGENT_STREAM_EVENT)) {
+            return;
+        }
+
+        String requestId = runtime.requestId() == null ? "" : runtime.requestId();
+        String message = payload == null ? "" : payload;
+        if ((type == AgentStreamEventType.DELTA || type == AgentStreamEventType.ERROR)
+                && message.length() > AGENT_STREAM_CHUNK_CHARS) {
+            int index = 0;
+            while (index < message.length()) {
+                int end = Math.min(message.length(), index + AGENT_STREAM_CHUNK_CHARS);
+                String chunk = message.substring(index, end);
+                sendAgentStreamPacket(player, requestId, type, chunk);
+                index = end;
+            }
+            return;
+        }
+        sendAgentStreamPacket(player, requestId, type, message);
+    }
+
+    private void sendAgentStreamPacket(
+            ServerPlayerEntity player,
+            String requestId,
+            AgentStreamEventType type,
+            String payload
+    ) {
+        if (player == null || type == null || !canUseAssistiveOverlay(player, MineClawdNetworking.AGENT_STREAM_EVENT)) {
+            return;
+        }
+        String safeRequestId = requestId == null ? "" : requestId;
+        String safePayload = payload == null ? "" : payload;
+        if (safePayload.length() > AGENT_STREAM_PACKET_MAX_CHARS) {
+            safePayload = safePayload.substring(0, AGENT_STREAM_PACKET_MAX_CHARS);
+        }
+        var packet = new RegistryByteBuf(Unpooled.buffer(), player.getServerWorld().getRegistryManager());
+        packet.writeString(safeRequestId, AGENT_STREAM_REQUEST_ID_MAX_CHARS);
+        packet.writeByte(type.id());
+        packet.writeString(safePayload, AGENT_STREAM_PACKET_MAX_CHARS);
+        NetworkManager.sendToPlayer(player, MineClawdNetworking.AGENT_STREAM_EVENT, packet);
+    }
+
+    private void finishRequestWithRuntimeError(ServerCommandSource source, AgentRuntime runtime, String message) {
+        if (runtime != null && isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
+        String normalized = message == null || message.isBlank() ? "unknown error" : message;
+        if (runtime != null && runtime.clientStreamEnabled()) {
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.ERROR, "Oops! " + normalized);
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
+        } else if (source != null) {
+            source.sendError(Text.literal("MineClawd: " + normalized));
+        }
+        sendTaskStatus(source, false);
+        finishActiveRequest(runtime);
     }
 
     private boolean validateConfig(ServerCommandSource source, MineClawdConfig config, MineClawdConfig.LlmProvider provider) {
@@ -1399,18 +2227,53 @@ public class MineClawd {
             ToolLoopState loopState,
             AgentRuntime runtime
     ) {
+        if (isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
         if (runtime.limitToolCallsEnabled() && depth >= runtime.toolLimit()) {
-            source.sendError(Text.literal("MineClawd: tool loop limit reached."));
-            finishActiveRequest(runtime);
+            finishRequestWithRuntimeError(source, runtime, "tool loop limit reached.");
             return;
         }
 
         MineClawdConfig config = MineClawdConfig.get();
         debugLog(runtime, "OpenAI request round=%d retry=%d session=%s", depth + 1, retryCount, runtime.sessionId());
-        OPENAI_CLIENT.sendMessage(config.endpoint, config.apiKey, config.model, history, openAiTools(runtime.dynamicRegistryEnabled()))
-                .whenComplete((response, error) -> {
-                    source.getServer().execute(() -> handleOpenAiStep(source, session, history, depth, retryCount, loopState, runtime, response, error));
-                });
+        AtomicBoolean streamedThisRound = new AtomicBoolean(false);
+        CompletableFuture<OpenAIResponse> requestFuture = OPENAI_CLIENT.sendMessage(
+                        config.endpoint,
+                        config.apiKey,
+                        config.model,
+                        history,
+                        openAiTools(runtime.dynamicRegistryEnabled()),
+                        runtime.clientStreamEnabled()
+                                ? chunk -> {
+                                    if (chunk == null || chunk.isEmpty()) {
+                                        return;
+                                    }
+                                    streamedThisRound.set(true);
+                                    queueAgentStreamDelta(source, runtime, chunk);
+                                }
+                                : null)
+                ;
+        trackActiveNetworkRequest(runtime, requestFuture);
+        requestFuture.whenComplete((response, error) -> {
+            clearActiveNetworkRequest(runtime, requestFuture);
+            if (source.getServer() == null) {
+                finishActiveRequest(runtime);
+                return;
+            }
+            source.getServer().execute(() -> handleOpenAiStep(
+                    source,
+                    session,
+                    history,
+                    depth,
+                    retryCount,
+                    loopState,
+                    runtime,
+                    streamedThisRound.get(),
+                    response,
+                    error));
+        });
     }
 
     private void handleOpenAiStep(
@@ -1421,9 +2284,14 @@ public class MineClawd {
             int retryCount,
             ToolLoopState loopState,
             AgentRuntime runtime,
+            boolean streamedThisRound,
             OpenAIResponse response,
             Throwable error
     ) {
+        if (isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
         if (error != null) {
             if (isRateLimitError(error) && retryCount < RATE_LIMIT_RETRIES) {
                 scheduleRateLimitRetry(source, runtime, retryCount, () ->
@@ -1462,11 +2330,18 @@ public class MineClawd {
             }
         }
         if (text != null && !text.isBlank()) {
-            sendAgentMessage(source, text);
+            if (runtime.clientStreamEnabled()) {
+                if (!streamedThisRound) {
+                    sendAgentStreamEvent(source, runtime, AgentStreamEventType.DELTA, text);
+                }
+            } else {
+                sendAgentMessage(source, text);
+            }
         }
 
         List<OpenAIToolCall> toolCalls = response.toolCalls();
         if (toolCalls != null && !toolCalls.isEmpty()) {
+            final boolean hadAssistantTextBeforeTools = text != null && !text.isBlank();
             history.add(OpenAIMessage.assistant(text, toolCalls));
             executeOpenAiToolCallsAsync(source, toolCalls, runtime)
                     .whenComplete((batch, batchError) -> {
@@ -1475,15 +2350,17 @@ public class MineClawd {
                             return;
                         }
                         source.getServer().execute(() -> {
+                            if (isRuntimeInactive(runtime)) {
+                                cleanupInactiveRuntime(runtime);
+                                return;
+                            }
                             if (batchError != null || batch == null) {
-                                source.sendError(Text.literal("MineClawd: tool execution failed: " + summarizeThrowable(batchError)));
-                                finishActiveRequest(runtime);
+                                finishRequestWithRuntimeError(source, runtime, "tool execution failed: " + summarizeThrowable(batchError));
                                 return;
                             }
                             ToolLoopState nextState = loopState.next(batch.signature(), batch.output());
                             if (nextState.repeatCount() > MAX_REPEAT_TOOL_CALLS) {
-                                source.sendError(Text.literal("MineClawd: repeated tool call detected. Stopping."));
-                                finishActiveRequest(runtime);
+                                finishRequestWithRuntimeError(source, runtime, "repeated tool call detected. Stopping.");
                                 return;
                             }
                             List<OpenAIMessage> toolMessages = batch.messages();
@@ -1491,6 +2368,9 @@ public class MineClawd {
                             if (session != null) {
                                 session.touch();
                                 SESSION_MANAGER.saveSession(runtime.ownerKey(), session);
+                            }
+                            if (runtime.clientStreamEnabled() && hadAssistantTextBeforeTools) {
+                                sendAgentStreamEvent(source, runtime, AgentStreamEventType.DELTA, "\n\n");
                             }
                             runOpenAiAgent(source, session, history, depth + 1, 0, nextState, runtime);
                         });
@@ -1507,6 +2387,9 @@ public class MineClawd {
         if (session != null) {
             maybeGenerateSessionTitle(source, MineClawdConfig.get(), MineClawdConfig.LlmProvider.OPENAI, session, text, runtime);
         }
+        if (runtime.clientStreamEnabled()) {
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
+        }
         sendTaskStatus(source, false);
         finishActiveRequest(runtime);
     }
@@ -1520,18 +2403,53 @@ public class MineClawd {
             ToolLoopState loopState,
             AgentRuntime runtime
     ) {
+        if (isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
         if (runtime.limitToolCallsEnabled() && depth >= runtime.toolLimit()) {
-            source.sendError(Text.literal("MineClawd: tool loop limit reached."));
-            finishActiveRequest(runtime);
+            finishRequestWithRuntimeError(source, runtime, "tool loop limit reached.");
             return;
         }
 
         MineClawdConfig config = MineClawdConfig.get();
         debugLog(runtime, "Vertex request round=%d retry=%d session=%s", depth + 1, retryCount, runtime.sessionId());
-        VERTEX_CLIENT.sendMessage(config.vertexEndpoint, config.vertexApiKey, config.vertexModel, history, vertexTools(runtime.dynamicRegistryEnabled()))
-                .whenComplete((response, error) -> {
-                    source.getServer().execute(() -> handleVertexStep(source, session, history, depth, retryCount, loopState, runtime, response, error));
-                });
+        AtomicBoolean streamedThisRound = new AtomicBoolean(false);
+        CompletableFuture<VertexAIResponse> requestFuture = VERTEX_CLIENT.sendMessage(
+                        config.vertexEndpoint,
+                        config.vertexApiKey,
+                        config.vertexModel,
+                        history,
+                        vertexTools(runtime.dynamicRegistryEnabled()),
+                        runtime.clientStreamEnabled()
+                                ? chunk -> {
+                                    if (chunk == null || chunk.isEmpty()) {
+                                        return;
+                                    }
+                                    streamedThisRound.set(true);
+                                    queueAgentStreamDelta(source, runtime, chunk);
+                                }
+                                : null)
+                ;
+        trackActiveNetworkRequest(runtime, requestFuture);
+        requestFuture.whenComplete((response, error) -> {
+            clearActiveNetworkRequest(runtime, requestFuture);
+            if (source.getServer() == null) {
+                finishActiveRequest(runtime);
+                return;
+            }
+            source.getServer().execute(() -> handleVertexStep(
+                    source,
+                    session,
+                    history,
+                    depth,
+                    retryCount,
+                    loopState,
+                    runtime,
+                    streamedThisRound.get(),
+                    response,
+                    error));
+        });
     }
 
     private void handleVertexStep(
@@ -1542,9 +2460,14 @@ public class MineClawd {
             int retryCount,
             ToolLoopState loopState,
             AgentRuntime runtime,
+            boolean streamedThisRound,
             VertexAIResponse response,
             Throwable error
     ) {
+        if (isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
         if (error != null) {
             if (isVertexFunctionResponseMismatch(error)
                     && retryCount < VERTEX_FUNCTION_RESPONSE_MISMATCH_RETRIES
@@ -1592,7 +2515,13 @@ public class MineClawd {
             }
         }
         if (text != null && !text.isBlank()) {
-            sendAgentMessage(source, text);
+            if (runtime.clientStreamEnabled()) {
+                if (!streamedThisRound) {
+                    sendAgentStreamEvent(source, runtime, AgentStreamEventType.DELTA, text);
+                }
+            } else {
+                sendAgentMessage(source, text);
+            }
         }
 
         if (response.modelMessage() != null) {
@@ -1601,6 +2530,7 @@ public class MineClawd {
 
         List<VertexAIToolCall> toolCalls = response.toolCalls();
         if (toolCalls != null && !toolCalls.isEmpty()) {
+            final boolean hadAssistantTextBeforeTools = text != null && !text.isBlank();
             executeVertexToolCallsAsync(source, toolCalls, runtime)
                     .whenComplete((batch, batchError) -> {
                         if (source.getServer() == null) {
@@ -1608,15 +2538,17 @@ public class MineClawd {
                             return;
                         }
                         source.getServer().execute(() -> {
+                            if (isRuntimeInactive(runtime)) {
+                                cleanupInactiveRuntime(runtime);
+                                return;
+                            }
                             if (batchError != null || batch == null) {
-                                source.sendError(Text.literal("MineClawd: tool execution failed: " + summarizeThrowable(batchError)));
-                                finishActiveRequest(runtime);
+                                finishRequestWithRuntimeError(source, runtime, "tool execution failed: " + summarizeThrowable(batchError));
                                 return;
                             }
                             ToolLoopState nextState = loopState.next(batch.signature(), batch.output());
                             if (nextState.repeatCount() > MAX_REPEAT_TOOL_CALLS) {
-                                source.sendError(Text.literal("MineClawd: repeated tool call detected. Stopping."));
-                                finishActiveRequest(runtime);
+                                finishRequestWithRuntimeError(source, runtime, "repeated tool call detected. Stopping.");
                                 return;
                             }
                             List<VertexAIMessage> toolMessages = batch.vertexMessages();
@@ -1624,6 +2556,9 @@ public class MineClawd {
                             if (session != null) {
                                 session.touch();
                                 SESSION_MANAGER.saveSession(runtime.ownerKey(), session);
+                            }
+                            if (runtime.clientStreamEnabled() && hadAssistantTextBeforeTools) {
+                                sendAgentStreamEvent(source, runtime, AgentStreamEventType.DELTA, "\n\n");
                             }
                             runVertexAgent(source, session, history, depth + 1, 0, nextState, runtime);
                         });
@@ -1638,6 +2573,9 @@ public class MineClawd {
         FAILED_REQUESTS_BY_OWNER.remove(runtime.ownerKey());
         if (session != null) {
             maybeGenerateSessionTitle(source, MineClawdConfig.get(), MineClawdConfig.LlmProvider.VERTEX_AI, session, text, runtime);
+        }
+        if (runtime.clientStreamEnabled()) {
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
         }
         sendTaskStatus(source, false);
         finishActiveRequest(runtime);
@@ -1668,6 +2606,9 @@ public class MineClawd {
             List<String> outputs,
             List<String> signatures
     ) {
+        if (runtime != null && isRuntimeInactive(runtime)) {
+            return CompletableFuture.completedFuture(null);
+        }
         if (toolCalls == null || index >= toolCalls.size()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -1735,6 +2676,9 @@ public class MineClawd {
             List<String> outputs,
             List<String> signatures
     ) {
+        if (runtime != null && isRuntimeInactive(runtime)) {
+            return CompletableFuture.completedFuture(null);
+        }
         if (toolCalls == null || index >= toolCalls.size()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -1789,13 +2733,19 @@ public class MineClawd {
         if (TOOL_ASK_USER.equals(toolName)) {
             return askUserQuestion(source, args, runtime);
         }
-        return CompletableFuture.completedFuture(executeToolCallSync(source, toolName, args));
+        return CompletableFuture.completedFuture(executeToolCallSync(source, toolName, args, runtime));
     }
 
-    private String executeToolCallSync(ServerCommandSource source, String toolName, JsonObject args) {
+    private String executeToolCallSync(ServerCommandSource source, String toolName, JsonObject args, AgentRuntime runtime) {
         if (toolName == null || toolName.isBlank()) {
             return "ERROR: Tool call is missing required `name`.";
         }
+        if (runtime != null && isRuntimeInactive(runtime)) {
+            return "ERROR: Request was stopped by user.";
+        }
+        String ownerKey = runtime == null || runtime.ownerKey() == null || runtime.ownerKey().isBlank()
+                ? sessionOwnerKey(source)
+                : runtime.ownerKey();
         ToolExecutionResult result;
         switch (toolName) {
             case TOOL_APPLY_INSTANT_SERVER_SCRIPT:
@@ -1911,6 +2861,15 @@ public class MineClawd {
                         readOptionalIntArg(args, "slot")
                 );
                 break;
+            case TOOL_LIST_ASSETS:
+                result = listAssetsTool(ownerKey);
+                break;
+            case TOOL_UPSERT_ASSET_RECORD:
+                result = upsertAssetRecordTool(ownerKey, args);
+                break;
+            case TOOL_REMOVE_ASSET_RECORD:
+                result = removeAssetRecordTool(ownerKey, args);
+                break;
             default:
                 return "ERROR: Unknown tool " + toolName;
         }
@@ -1983,6 +2942,119 @@ public class MineClawd {
         }
     }
 
+    private String readOptionalStringArg(JsonObject args, String key) {
+        String value = readRequiredStringArg(args, key);
+        if (value == null) {
+            return "";
+        }
+        return value.trim();
+    }
+
+    private ToolExecutionResult listAssetsTool(String ownerKey) {
+        List<AssetRecord> assets = ASSETS_MANAGER.list(ownerKey);
+        if (assets.isEmpty()) {
+            return new ToolExecutionResult(true, "No assets tracked yet.");
+        }
+        StringBuilder out = new StringBuilder();
+        out.append("Tracked assets (").append(assets.size()).append(")\n");
+        for (AssetRecord asset : assets) {
+            if (asset == null) {
+                continue;
+            }
+            out.append("- `").append(asset.id()).append("` [").append(asset.category().id()).append("] ");
+            out.append(asset.name());
+            if (!asset.summary().isBlank()) {
+                out.append(" - ").append(asset.summary());
+            }
+            if (asset.category() == AssetCategory.ENTITIES && !asset.entityUuid().isBlank()) {
+                out.append(" (uuid=").append(asset.entityUuid()).append(")");
+            }
+            if (asset.category() == AssetCategory.ITEMS_BLOCKS_FLUIDS && !asset.contentId().isBlank()) {
+                out.append(" (content_id=").append(asset.contentId()).append(")");
+            }
+            if (asset.category() == AssetCategory.SPECIAL_ITEMS && !asset.specialItemId().isBlank()) {
+                out.append(" (special_item_id=").append(asset.specialItemId()).append(")");
+            }
+            if (asset.category() == AssetCategory.COMMANDS && !asset.command().isBlank()) {
+                out.append(" (command=").append(asset.command()).append(")");
+            }
+            out.append("\n");
+        }
+        return new ToolExecutionResult(true, out.toString().trim());
+    }
+
+    private ToolExecutionResult upsertAssetRecordTool(String ownerKey, JsonObject args) {
+        String scriptPath = readOptionalStringArg(args, "script_path");
+        if (scriptPath.isBlank()) {
+            scriptPath = readOptionalStringArg(args, "scriptPath");
+        }
+        AssetDraft draft = new AssetDraft(
+                readOptionalStringArg(args, "id"),
+                readOptionalStringArg(args, "category"),
+                readOptionalStringArg(args, "name"),
+                readOptionalStringArg(args, "summary"),
+                scriptPath,
+                readOptionalStringArg(args, "details"),
+                readOptionalStringArg(args, "content_id"),
+                readOptionalStringArg(args, "special_item_id"),
+                readOptionalStringArg(args, "special_item_nbt"),
+                readOptionalStringArg(args, "command"),
+                readOptionalStringArg(args, "entity_uuid"),
+                readOptionalStringArg(args, "entity_dimension"),
+                readOptionalDoubleArg(args, "entity_x"),
+                readOptionalDoubleArg(args, "entity_y"),
+                readOptionalDoubleArg(args, "entity_z"),
+                readOptionalStringArg(args, "session_id")
+        );
+        UpsertResult result = ASSETS_MANAGER.upsert(ownerKey, draft);
+        if (!result.success()) {
+            return new ToolExecutionResult(false, result.message());
+        }
+        AssetRecord record = result.record();
+        if (record == null) {
+            return new ToolExecutionResult(true, result.message());
+        }
+        StringBuilder out = new StringBuilder(result.message());
+        out.append("\nid: ").append(record.id());
+        out.append("\ncategory: ").append(record.category().id());
+        out.append("\nname: ").append(record.name());
+        if (!record.summary().isBlank()) {
+            out.append("\nsummary: ").append(record.summary());
+        }
+        if (!record.scriptPath().isBlank()) {
+            out.append("\nscript_path: ").append(record.scriptPath());
+        }
+        if (!record.entityUuid().isBlank()) {
+            out.append("\nentity_uuid: ").append(record.entityUuid());
+        }
+        if (!record.contentId().isBlank()) {
+            out.append("\ncontent_id: ").append(record.contentId());
+        }
+        if (!record.specialItemId().isBlank()) {
+            out.append("\nspecial_item_id: ").append(record.specialItemId());
+        }
+        return new ToolExecutionResult(true, out.toString());
+    }
+
+    private ToolExecutionResult removeAssetRecordTool(String ownerKey, JsonObject args) {
+        String id = readOptionalStringArg(args, "id");
+        if (id.isBlank()) {
+            id = readOptionalStringArg(args, "reference");
+        }
+        if (id.isBlank()) {
+            return new ToolExecutionResult(false, "Tool call is missing required string `id`.");
+        }
+        AssetRecord record = ASSETS_MANAGER.resolve(ownerKey, id);
+        if (record == null) {
+            return new ToolExecutionResult(false, "Asset record was not found.");
+        }
+        boolean removed = ASSETS_MANAGER.remove(ownerKey, record.id());
+        if (!removed) {
+            return new ToolExecutionResult(false, "Failed to remove asset record.");
+        }
+        return new ToolExecutionResult(true, "Removed asset record `" + record.id() + "`.");
+    }
+
     private List<String> readQuestionOptions(JsonObject args) {
         if (args == null) {
             return List.of();
@@ -2020,6 +3092,9 @@ public class MineClawd {
         if (!(source.getEntity() instanceof ServerPlayerEntity player) || source.getServer() == null) {
             return CompletableFuture.completedFuture("ERROR: ask-user-question requires a player source.");
         }
+        if (runtime != null && isRuntimeInactive(runtime)) {
+            return CompletableFuture.completedFuture("ERROR: Request was stopped by user.");
+        }
 
         String question = readRequiredStringArg(args, "question");
         if (question == null || question.isBlank()) {
@@ -2051,7 +3126,8 @@ public class MineClawd {
         PENDING_QUESTIONS_BY_ID.put(questionId, pending);
         PENDING_OTHER_TEXT_INPUT.remove(player.getUuid());
 
-        if (canSendToClient(player, MineClawdNetworking.OPEN_QUESTION)) {
+        boolean questionUiAvailable = canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_QUESTION);
+        if (questionUiAvailable) {
             QuestionPromptPayload payload = new QuestionPromptPayload(
                     questionId,
                     question,
@@ -2061,9 +3137,6 @@ public class MineClawd {
             var buffer = new PacketByteBuf(Unpooled.buffer());
             buffer.writeString(payload.toJson());
             NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_QUESTION, buffer);
-            player.sendMessage(Text.empty().append(agentPrefix()).append(renderAgentBody(
-                    "I need one decision from you. Please answer in the popup (`" + QUESTION_TIMEOUT_SECONDS + "s` timeout)."
-            )), false);
         } else {
             sendPendingQuestionFallback(source, player, pending);
         }
@@ -2077,8 +3150,10 @@ public class MineClawd {
                 PendingQuestion current = PENDING_QUESTIONS_BY_ID.get(questionId);
                 if (current == pending) {
                     completePendingQuestion(current, "SKIPPED: User did not respond within 60 seconds.");
-                    player.sendMessage(Text.empty().append(agentPrefix())
-                            .append(renderAgentBody("Question timed out. Continuing with skip result.")), false);
+                    if (!questionUiAvailable) {
+                        player.sendMessage(Text.empty().append(agentPrefix())
+                                .append(renderAgentBody("Question timed out. Continuing with skip result.")), false);
+                    }
                 }
             });
         });
@@ -2154,31 +3229,40 @@ public class MineClawd {
         if (pending == null || !pending.playerUuid().equals(player.getUuid())) {
             return;
         }
+        boolean notifyInChat = !canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_QUESTION);
 
         switch (response.type()) {
             case OPTION -> {
                 int index = response.optionIndex();
                 if (index < 0 || index >= pending.options().size()) {
-                    player.sendMessage(Text.empty().append(agentPrefix())
-                            .append(renderAgentBody("Invalid option index from client UI. Please retry.")), false);
+                    if (notifyInChat) {
+                        player.sendMessage(Text.empty().append(agentPrefix())
+                                .append(renderAgentBody("Invalid option index from client UI. Please retry.")), false);
+                    }
                     return;
                 }
                 String selected = pending.options().get(index);
                 completePendingQuestion(pending, "User selected option " + (index + 1) + ": " + selected);
-                player.sendMessage(Text.empty().append(agentPrefix())
-                        .append(renderAgentBody("Selection received: `" + selected + "`.")), false);
+                if (notifyInChat) {
+                    player.sendMessage(Text.empty().append(agentPrefix())
+                            .append(renderAgentBody("Selection received: `" + selected + "`.")), false);
+                }
             }
             case OTHER -> {
                 String custom = response.value() == null ? "" : response.value().trim();
                 if (custom.isBlank()) {
                     completePendingQuestion(pending, "SKIPPED: User submitted empty custom response.");
-                    player.sendMessage(Text.empty().append(agentPrefix())
-                            .append(renderAgentBody("Custom response was empty, treated as skip.")), false);
+                    if (notifyInChat) {
+                        player.sendMessage(Text.empty().append(agentPrefix())
+                                .append(renderAgentBody("Custom response was empty, treated as skip.")), false);
+                    }
                     return;
                 }
                 completePendingQuestion(pending, "User provided custom response: " + custom);
-                player.sendMessage(Text.empty().append(agentPrefix())
-                        .append(renderAgentBody("Custom response received.")), false);
+                if (notifyInChat) {
+                    player.sendMessage(Text.empty().append(agentPrefix())
+                            .append(renderAgentBody("Custom response received.")), false);
+                }
             }
             case SKIP -> {
                 String reason = response.value() == null ? "" : response.value().trim();
@@ -2186,8 +3270,10 @@ public class MineClawd {
                     reason = "User skipped.";
                 }
                 completePendingQuestion(pending, "SKIPPED: " + reason);
-                player.sendMessage(Text.empty().append(agentPrefix())
-                        .append(renderAgentBody("Skipped.")), false);
+                if (notifyInChat) {
+                    player.sendMessage(Text.empty().append(agentPrefix())
+                            .append(renderAgentBody("Skipped.")), false);
+                }
             }
         }
     }
@@ -2262,6 +3348,21 @@ public class MineClawd {
                         TOOL_SYNC_COMMAND_TREE,
                         "Refresh command tree/tab-completion for all online players. Use only after command registration changes.",
                         noArgToolParameters()
+                ),
+                new OpenAITool(
+                        TOOL_LIST_ASSETS,
+                        "List currently tracked persistent asset records for this player/session owner.",
+                        noArgToolParameters()
+                ),
+                new OpenAITool(
+                        TOOL_UPSERT_ASSET_RECORD,
+                        "Create or update an asset tracking record for entities, items/blocks/fluids, special items, commands, or game mechanics.",
+                        assetUpsertToolParameters()
+                ),
+                new OpenAITool(
+                        TOOL_REMOVE_ASSET_RECORD,
+                        "Remove an obsolete asset tracking record by id/reference.",
+                        assetRemoveToolParameters()
                 )
         ));
         if (dynamicRegistryEnabled) {
@@ -2357,6 +3458,21 @@ public class MineClawd {
                         TOOL_SYNC_COMMAND_TREE,
                         "Refresh command tree/tab-completion for all online players. Use only after command registration changes.",
                         noArgToolParameters()
+                ),
+                new VertexAIFunction(
+                        TOOL_LIST_ASSETS,
+                        "List currently tracked persistent asset records for this player/session owner.",
+                        noArgToolParameters()
+                ),
+                new VertexAIFunction(
+                        TOOL_UPSERT_ASSET_RECORD,
+                        "Create or update an asset tracking record for entities, items/blocks/fluids, special items, commands, or game mechanics.",
+                        assetUpsertToolParameters()
+                ),
+                new VertexAIFunction(
+                        TOOL_REMOVE_ASSET_RECORD,
+                        "Remove an obsolete asset tracking record by id/reference.",
+                        assetRemoveToolParameters()
                 )
         ));
         if (dynamicRegistryEnabled) {
@@ -2663,6 +3779,115 @@ public class MineClawd {
         return objectToolParameters(properties, "type", "slot");
     }
 
+    private JsonObject assetUpsertToolParameters() {
+        JsonObject properties = new JsonObject();
+
+        JsonObject id = new JsonObject();
+        id.addProperty("type", "string");
+        id.addProperty("description", "Optional asset id. Omit to auto-generate from category/name.");
+        properties.add("id", id);
+
+        JsonObject category = new JsonObject();
+        category.addProperty("type", "string");
+        JsonArray categoryEnum = new JsonArray();
+        categoryEnum.add("entities");
+        categoryEnum.add("items_blocks_fluids");
+        categoryEnum.add("special_items");
+        categoryEnum.add("commands");
+        categoryEnum.add("game_mechanics");
+        category.add("enum", categoryEnum);
+        category.addProperty("description", "Asset category.");
+        properties.add("category", category);
+
+        JsonObject name = new JsonObject();
+        name.addProperty("type", "string");
+        name.addProperty("description", "Display name for this asset.");
+        properties.add("name", name);
+
+        JsonObject summary = new JsonObject();
+        summary.addProperty("type", "string");
+        summary.addProperty("description", "Optional one-sentence summary.");
+        properties.add("summary", summary);
+
+        JsonObject scriptPath = new JsonObject();
+        scriptPath.addProperty("type", "string");
+        scriptPath.addProperty("description", "Optional script path, for example `commands/fly.js`.");
+        properties.add("script_path", scriptPath);
+
+        JsonObject details = new JsonObject();
+        details.addProperty("type", "string");
+        details.addProperty("description", "Optional free-form details.");
+        properties.add("details", details);
+
+        JsonObject entityUuid = new JsonObject();
+        entityUuid.addProperty("type", "string");
+        entityUuid.addProperty("description", "Entity UUID for `entities` category.");
+        properties.add("entity_uuid", entityUuid);
+
+        JsonObject entityDimension = new JsonObject();
+        entityDimension.addProperty("type", "string");
+        entityDimension.addProperty("description", "Entity dimension id, for example `minecraft:overworld`.");
+        properties.add("entity_dimension", entityDimension);
+
+        JsonObject entityX = new JsonObject();
+        entityX.addProperty("type", "number");
+        entityX.addProperty("description", "Entity X coordinate.");
+        properties.add("entity_x", entityX);
+
+        JsonObject entityY = new JsonObject();
+        entityY.addProperty("type", "number");
+        entityY.addProperty("description", "Entity Y coordinate.");
+        properties.add("entity_y", entityY);
+
+        JsonObject entityZ = new JsonObject();
+        entityZ.addProperty("type", "number");
+        entityZ.addProperty("description", "Entity Z coordinate.");
+        properties.add("entity_z", entityZ);
+
+        JsonObject contentId = new JsonObject();
+        contentId.addProperty("type", "string");
+        contentId.addProperty("description", "Dynamic content id for `items_blocks_fluids`, for example `mineclawd:dynamic_item_001`.");
+        properties.add("content_id", contentId);
+
+        JsonObject specialItemId = new JsonObject();
+        specialItemId.addProperty("type", "string");
+        specialItemId.addProperty("description", "Item id for `special_items`.");
+        properties.add("special_item_id", specialItemId);
+
+        JsonObject specialItemNbt = new JsonObject();
+        specialItemNbt.addProperty("type", "string");
+        specialItemNbt.addProperty("description", "Optional NBT/component suffix used when giving special item.");
+        properties.add("special_item_nbt", specialItemNbt);
+
+        JsonObject command = new JsonObject();
+        command.addProperty("type", "string");
+        command.addProperty("description", "Command text for `commands` category.");
+        properties.add("command", command);
+
+        JsonObject sessionId = new JsonObject();
+        sessionId.addProperty("type", "string");
+        sessionId.addProperty("description", "Optional session id that created/owns this asset.");
+        properties.add("session_id", sessionId);
+
+        return objectToolParameters(properties, "category", "name");
+    }
+
+    private JsonObject assetRemoveToolParameters() {
+        JsonObject properties = new JsonObject();
+
+        JsonObject id = new JsonObject();
+        id.addProperty("type", "string");
+        id.addProperty("description", "Asset id or reference to remove.");
+        properties.add("id", id);
+
+        JsonObject reference = new JsonObject();
+        reference.addProperty("type", "string");
+        reference.addProperty("description", "Alias for id.");
+        properties.add("reference", reference);
+
+        return objectToolParameters(properties, "id");
+    }
+
     private JsonObject objectToolParameters(JsonObject properties, String... requiredKeys) {
         JsonObject root = new JsonObject();
         root.addProperty("type", "object");
@@ -2853,6 +4078,8 @@ public class MineClawd {
             prompt.append("\n\n")
                     .append(DYNAMIC_REGISTRY_PROMPT_APPENDIX);
         }
+        prompt.append("\n\n")
+                .append(ASSET_TRACKING_PROMPT_APPENDIX);
         return prompt.toString();
     }
 
@@ -3010,10 +4237,58 @@ public class MineClawd {
         return false;
     }
 
+    private boolean isRuntimeActive(AgentRuntime runtime) {
+        if (runtime == null || runtime.ownerKey() == null || runtime.ownerKey().isBlank()) {
+            return false;
+        }
+        String requestId = runtime.requestId();
+        if (requestId == null || requestId.isBlank()) {
+            return false;
+        }
+        if (CANCELLED_REQUEST_IDS.contains(requestId)) {
+            return false;
+        }
+        return requestId.equals(ACTIVE_REQUESTS.get(runtime.ownerKey()));
+    }
+
+    private boolean isRuntimeInactive(AgentRuntime runtime) {
+        return !isRuntimeActive(runtime);
+    }
+
+    private void trackActiveNetworkRequest(AgentRuntime runtime, CompletableFuture<?> requestFuture) {
+        if (runtime == null || requestFuture == null || runtime.requestId() == null || runtime.requestId().isBlank()) {
+            return;
+        }
+        ACTIVE_NETWORK_REQUESTS.put(runtime.requestId(), requestFuture);
+    }
+
+    private void clearActiveNetworkRequest(AgentRuntime runtime, CompletableFuture<?> requestFuture) {
+        if (runtime == null || requestFuture == null || runtime.requestId() == null || runtime.requestId().isBlank()) {
+            return;
+        }
+        ACTIVE_NETWORK_REQUESTS.remove(runtime.requestId(), requestFuture);
+    }
+
+    private void cleanupInactiveRuntime(AgentRuntime runtime) {
+        if (runtime == null || runtime.requestId() == null || runtime.requestId().isBlank()) {
+            return;
+        }
+        ACTIVE_NETWORK_REQUESTS.remove(runtime.requestId());
+        CANCELLED_REQUEST_IDS.remove(runtime.requestId());
+    }
+
     private void scheduleRateLimitRetry(ServerCommandSource source, AgentRuntime runtime, int retryCount, Runnable action) {
+        if (isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
         long delay = RATE_LIMIT_BACKOFF_MS * (retryCount + 1L);
         debugLog(runtime, "Rate limited. Scheduling retry %d in %d ms.", retryCount + 1, delay);
         CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS).execute(() -> {
+            if (isRuntimeInactive(runtime)) {
+                cleanupInactiveRuntime(runtime);
+                return;
+            }
             if (source.getServer() == null) {
                 finishActiveRequest(runtime);
                 return;
@@ -3027,6 +4302,11 @@ public class MineClawd {
             return;
         }
         ACTIVE_REQUESTS.remove(runtime.ownerKey(), runtime.requestId());
+        CompletableFuture<?> inFlight = ACTIVE_NETWORK_REQUESTS.remove(runtime.requestId());
+        if (inFlight != null && !inFlight.isDone()) {
+            inFlight.cancel(true);
+        }
+        CANCELLED_REQUEST_IDS.remove(runtime.requestId());
         debugLog(runtime, "Request finished.");
     }
 
@@ -3169,14 +4449,34 @@ public class MineClawd {
         if (runtime == null) {
             return;
         }
+        if (isRuntimeInactive(runtime)) {
+            cleanupInactiveRuntime(runtime);
+            return;
+        }
         rollbackFailedPrompt(session, runtime, provider);
         String errorMessage = sanitizeErrorMessage(rawError);
         if (session != null && runtime.interactiveErrorActions()) {
             FailedRequestContext failed = registerFailedRequest(runtime, provider);
-            sendLlmErrorWithActions(source, failed, errorMessage);
+            if (runtime.clientStreamEnabled()) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("Oops! ").append(errorMessage);
+                sb.append("\nRetry command: /mineclawd retry ").append(failed.token());
+                sb.append("\nAdjust prompt command: ").append(buildAdjustPromptCommand(failed.request()));
+                sendAgentStreamEvent(source, runtime, AgentStreamEventType.ERROR, sb.toString());
+            } else {
+                sendLlmErrorWithActions(source, failed, errorMessage);
+            }
         } else {
-            sendAgentLine(source, Text.literal("Oops! " + errorMessage).formatted(Formatting.RED));
+            if (runtime.clientStreamEnabled()) {
+                sendAgentStreamEvent(source, runtime, AgentStreamEventType.ERROR, "Oops! " + errorMessage);
+            } else {
+                sendAgentLine(source, Text.literal("Oops! " + errorMessage).formatted(Formatting.RED));
+            }
         }
+        if (runtime.clientStreamEnabled()) {
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
+        }
+        sendTaskStatus(source, false);
         finishActiveRequest(runtime);
     }
 
@@ -3571,8 +4871,8 @@ public class MineClawd {
         if (player == null) {
             return;
         }
-        if (!canSendToClient(player, MineClawdNetworking.OPEN_HISTORY_BOOK)) {
-            sendAgentMessage(source, "Client mod is required for `/mineclawd history` book UI.");
+        if (!canUseGui(player, MineClawdNetworking.OPEN_HISTORY_BOOK)) {
+            sendAgentMessage(source, "Client history UI unavailable (client mod missing or `Enable GUI` is off).");
             return;
         }
 
@@ -3648,6 +4948,26 @@ public class MineClawd {
     }
 
     private record HistoryEntry(boolean assistant, String content) {
+    }
+
+    private boolean canUseGui(ServerPlayerEntity player, Identifier channel) {
+        if (!canSendToClient(player, channel)) {
+            return false;
+        }
+        if (player == null) {
+            return false;
+        }
+        return !Boolean.FALSE.equals(CLIENT_GUI_ENABLED.get(player.getUuid()));
+    }
+
+    private boolean canUseAssistiveOverlay(ServerPlayerEntity player, Identifier channel) {
+        if (!canUseGui(player, channel)) {
+            return false;
+        }
+        if (player == null) {
+            return false;
+        }
+        return PLAYER_SETTINGS.isAssistiveTouchEnabled(player.getUuidAsString());
     }
 
     public static boolean canSendToClient(ServerPlayerEntity player, Identifier channel) {
@@ -3777,7 +5097,8 @@ public class MineClawd {
             String sessionId,
             String userRequest,
             boolean sessionBacked,
-            boolean interactiveErrorActions
+            boolean interactiveErrorActions,
+            boolean clientStreamEnabled
     ) {
     }
 }
