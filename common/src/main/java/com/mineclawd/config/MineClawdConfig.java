@@ -55,11 +55,11 @@ public class MineClawdConfig {
     @SerialEntry(comment = "OpenAI API key.")
     public String apiKey = "";
 
-    @SerialEntry(comment = "OpenAI model name (e.g., gpt-4o-mini).")
-    public String model = "gpt-4o-mini";
+    @SerialEntry(comment = "OpenAI model name (e.g., gpt-5.2).")
+    public String model = "gpt-5.2";
 
     @SerialEntry(comment = "OpenAI summarize model used to generate session titles.")
-    public String summarizeModel = "gpt-4o-mini";
+    public String summarizeModel = "gpt-5.2";
 
     @SerialEntry(comment = "Vertex AI express mode API base URL (no trailing slash).")
     public String vertexEndpoint = "https://aiplatform.googleapis.com/v1";
@@ -68,10 +68,10 @@ public class MineClawdConfig {
     public String vertexApiKey = "";
 
     @SerialEntry(comment = "Vertex AI model name or full path (e.g., publishers/google/models/gemini-3-pro-preview).")
-    public String vertexModel = "publishers/google/models/gemini-3-pro-preview";
+    public String vertexModel = "gemini-3.1-pro-preview";
 
     @SerialEntry(comment = "Vertex AI summarize model used to generate session titles.")
-    public String vertexSummarizeModel = "publishers/google/models/gemini-3-pro-preview";
+    public String vertexSummarizeModel = "gemini-3-flash-preview";
 
     @SerialEntry(comment = "Enable debug logging for LLM responses and tool calls.")
     public boolean debugMode = false;
@@ -87,6 +87,9 @@ public class MineClawdConfig {
 
     @SerialEntry(comment = "Dynamic placeholder registry mode. AUTO enables it in single-player client runtime and disables it on dedicated servers. WARNING: when ENABLED on a dedicated server, joining clients must also install MineClawd.")
     public DynamicRegistryMode dynamicRegistryMode = DynamicRegistryMode.AUTO;
+
+    @SerialEntry(comment = "Client-only: enable MineClawd GUI overlays/screens. When false, GUI behaves like a non-modded client while dynamic content sync remains active.")
+    public boolean enableGui = true;
 
     public static MineClawdConfig get() {
         return HANDLER.instance();

@@ -4,11 +4,18 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.mineclawd.assets.AssetsOverlayPayload;
+import com.mineclawd.client.AgentResponseOverlay;
+import com.mineclawd.config.MineClawdConfig;
 import com.mineclawd.config.MineClawdConfigScreen;
 import com.mineclawd.dynamic.DynamicContentRegistry;
 import com.mineclawd.question.QuestionPromptPayload;
-import com.mineclawd.question.QuestionPromptScreen;
+import com.mineclawd.session.SessionOverlayPayload;
+import dev.architectury.event.EventResult;
+import dev.architectury.event.events.client.ClientGuiEvent;
 import dev.architectury.event.events.client.ClientPlayerEvent;
+import dev.architectury.event.events.client.ClientScreenInputEvent;
+import dev.architectury.event.events.client.ClientTickEvent;
 import dev.architectury.networking.NetworkManager;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.MinecraftClient;
@@ -17,6 +24,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
+import net.minecraft.text.TextColor;
 import net.minecraft.util.Formatting;
 
 import java.lang.reflect.Constructor;
@@ -27,6 +35,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public final class MineClawdClientNetworking {
     private static final int HISTORY_PACKET_MAX_CHARS = 262_144;
@@ -41,6 +50,9 @@ public final class MineClawdClientNetworking {
         }
         initialized = true;
 
+        MineClawdConfig.HANDLER.load();
+        AgentResponseOverlay.onClientGuiPreferenceChanged(MinecraftClient.getInstance(), MineClawdConfig.get().enableGui);
+
         MineClawdNetworking.register();
 
         NetworkManager.registerReceiver(NetworkManager.s2c(), MineClawdNetworking.OPEN_CONFIG,
@@ -52,6 +64,9 @@ public final class MineClawdClientNetworking {
                     String finalBroadcastTarget = broadcastTarget;
                     MinecraftClient client = MinecraftClient.getInstance();
                     client.execute(() -> {
+                        if (!isGuiEnabled()) {
+                            return;
+                        }
                         MineClawdConfigScreen.syncBroadcastTargetFromServer(finalBroadcastTarget);
                         client.setScreen(MineClawdConfigScreen.create(client.currentScreen, finalBroadcastTarget));
                     });
@@ -66,6 +81,17 @@ public final class MineClawdClientNetworking {
                     String finalBroadcastTarget = broadcastTarget;
                     MinecraftClient client = MinecraftClient.getInstance();
                     client.execute(() -> MineClawdConfigScreen.syncBroadcastTargetFromServer(finalBroadcastTarget));
+                });
+
+        NetworkManager.registerReceiver(NetworkManager.s2c(), MineClawdNetworking.SYNC_ASSISTIVE_TOUCH,
+                (buf, context) -> {
+                    boolean enabled = true;
+                    if (buf.isReadable()) {
+                        enabled = buf.readBoolean();
+                    }
+                    boolean finalEnabled = enabled;
+                    MinecraftClient client = MinecraftClient.getInstance();
+                    client.execute(() -> AgentResponseOverlay.syncAssistiveTouchFromServer(client, finalEnabled));
                 });
 
         NetworkManager.registerReceiver(NetworkManager.s2c(), MineClawdNetworking.SYNC_DYNAMIC_CONTENT,
@@ -89,10 +115,33 @@ public final class MineClawdClientNetworking {
                         if (prompt == null) {
                             return;
                         }
-                        if (client.player != null) {
-                            client.player.sendMessage(Text.literal("[MineClawd] Please answer the question in the popup window."), false);
+                        AgentResponseOverlay.handleQuestionPrompt(client, prompt);
+                    });
+                });
+
+        NetworkManager.registerReceiver(NetworkManager.s2c(), MineClawdNetworking.OPEN_SESSIONS,
+                (buf, context) -> {
+                    String payload = buf.readString(262_144);
+                    MinecraftClient client = MinecraftClient.getInstance();
+                    client.execute(() -> {
+                        SessionOverlayPayload sessionPayload = SessionOverlayPayload.fromJson(payload);
+                        if (sessionPayload == null) {
+                            return;
                         }
-                        client.setScreen(new QuestionPromptScreen(client.currentScreen, prompt));
+                        AgentResponseOverlay.handleSessionsPayload(client, sessionPayload);
+                    });
+                });
+
+        NetworkManager.registerReceiver(NetworkManager.s2c(), MineClawdNetworking.OPEN_ASSETS,
+                (buf, context) -> {
+                    String payload = buf.readString(262_144);
+                    MinecraftClient client = MinecraftClient.getInstance();
+                    client.execute(() -> {
+                        AssetsOverlayPayload assetsPayload = AssetsOverlayPayload.fromJson(payload);
+                        if (assetsPayload == null) {
+                            return;
+                        }
+                        AgentResponseOverlay.handleAssetsPayload(client, assetsPayload);
                     });
                 });
 
@@ -126,8 +175,56 @@ public final class MineClawdClientNetworking {
                     });
                 });
 
+        NetworkManager.registerReceiver(NetworkManager.s2c(), MineClawdNetworking.AGENT_STREAM_EVENT,
+                (buf, context) -> {
+                    String requestId = buf.readString(64);
+                    AgentStreamEventType type = AgentStreamEventType.fromId(buf.readByte() & 0xFF);
+                    String payload = buf.readString(32767);
+                    MinecraftClient client = MinecraftClient.getInstance();
+                    client.execute(() -> AgentResponseOverlay.handleStreamEvent(requestId, type, payload));
+                });
+
+        ClientTickEvent.CLIENT_POST.register(AgentResponseOverlay::tick);
+        ClientGuiEvent.RENDER_HUD.register((graphics, delta) ->
+                AgentResponseOverlay.renderHud(graphics, MinecraftClient.getInstance()));
+        ClientGuiEvent.RENDER_POST.register((screen, graphics, mouseX, mouseY, delta) ->
+                AgentResponseOverlay.renderOnScreen(graphics, MinecraftClient.getInstance(), mouseX, mouseY));
+        ClientScreenInputEvent.MOUSE_CLICKED_PRE.register((client, screen, mouseX, mouseY, button) -> {
+            boolean handled = AgentResponseOverlay.mouseClicked(client, mouseX, mouseY, button)
+                    || AgentResponseOverlay.capturesMouseInput(client, mouseX, mouseY);
+            return handled ? EventResult.interruptDefault() : EventResult.pass();
+        });
+        ClientScreenInputEvent.MOUSE_RELEASED_PRE.register((client, screen, mouseX, mouseY, button) -> {
+            boolean handled = AgentResponseOverlay.mouseReleased(client, mouseX, mouseY, button)
+                    || AgentResponseOverlay.capturesMouseInput(client, mouseX, mouseY);
+            return handled ? EventResult.interruptDefault() : EventResult.pass();
+        });
+        ClientScreenInputEvent.MOUSE_DRAGGED_PRE.register((client, screen, mouseX, mouseY, button, dragX, dragY) -> {
+            boolean handled = AgentResponseOverlay.mouseDragged(client, mouseX, mouseY, button)
+                    || AgentResponseOverlay.capturesMouseInput(client, mouseX, mouseY);
+            return handled ? EventResult.interruptDefault() : EventResult.pass();
+        });
+        ClientScreenInputEvent.MOUSE_SCROLLED_PRE.register((client, screen, mouseX, mouseY, amountX, amountY) -> {
+            boolean handled = AgentResponseOverlay.mouseScrolled(client, mouseX, mouseY, amountY)
+                    || AgentResponseOverlay.capturesMouseInput(client, mouseX, mouseY);
+            return handled ? EventResult.interruptDefault() : EventResult.pass();
+        });
+        ClientScreenInputEvent.KEY_PRESSED_PRE.register((client, screen, keyCode, scanCode, modifiers) -> {
+            boolean handled = AgentResponseOverlay.keyPressed(client, keyCode, scanCode, modifiers)
+                    || AgentResponseOverlay.capturesKeyboardInput(client);
+            return handled ? EventResult.interruptDefault() : EventResult.pass();
+        });
+        ClientScreenInputEvent.CHAR_TYPED_PRE.register((client, screen, character, keyCode) -> {
+            boolean handled = AgentResponseOverlay.charTyped(client, character, keyCode)
+                    || AgentResponseOverlay.capturesKeyboardInput(client);
+            return handled ? EventResult.interruptDefault() : EventResult.pass();
+        });
+
         ClientPlayerEvent.CLIENT_PLAYER_JOIN.register(player -> sendClientReadyPing());
-        ClientPlayerEvent.CLIENT_PLAYER_QUIT.register(player -> MineClawdConfigScreen.clearBroadcastTargetServerSync());
+        ClientPlayerEvent.CLIENT_PLAYER_QUIT.register(player -> {
+            MineClawdConfigScreen.clearBroadcastTargetServerSync();
+            AgentResponseOverlay.onClientPlayerQuit();
+        });
     }
 
     private static void sendClientReadyPing() {
@@ -143,7 +240,36 @@ public final class MineClawdClientNetworking {
                 if (payload == null) {
                     continue;
                 }
+                writeGuiPreference(payload);
                 method.invoke(null, MineClawdNetworking.CLIENT_READY, payload);
+                return;
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static void sendClientGuiPreferenceSync() {
+        sendClientPreferencePacket(MineClawdNetworking.CLIENT_GUI_PREF);
+    }
+
+    private static void sendClientPreferencePacket(net.minecraft.util.Identifier channel) {
+        if (channel == null) {
+            return;
+        }
+        try {
+            for (Method method : NetworkManager.class.getMethods()) {
+                if (!"sendToServer".equals(method.getName())
+                        || !Modifier.isStatic(method.getModifiers())
+                        || method.getParameterCount() != 2
+                        || method.getParameterTypes()[0] != net.minecraft.util.Identifier.class) {
+                    continue;
+                }
+                Object payload = createClientReadyBuffer(method.getParameterTypes()[1]);
+                if (payload == null) {
+                    continue;
+                }
+                writeGuiPreference(payload);
+                method.invoke(null, channel, payload);
                 return;
             }
         } catch (Exception ignored) {
@@ -177,6 +303,30 @@ public final class MineClawdClientNetworking {
         } catch (ReflectiveOperationException ignored) {
         }
         return null;
+    }
+
+    private static void writeGuiPreference(Object payload) {
+        boolean enabled = isGuiEnabled();
+        if (payload instanceof PacketByteBuf packetByteBuf) {
+            packetByteBuf.writeBoolean(enabled);
+            return;
+        }
+        if (payload == null) {
+            return;
+        }
+        try {
+            Method writer = payload.getClass().getMethod("writeBoolean", boolean.class);
+            writer.invoke(payload, enabled);
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static boolean isGuiEnabled() {
+        try {
+            return MineClawdConfig.get().enableGui;
+        } catch (Exception ignored) {
+            return true;
+        }
     }
 
     private static ItemStack readHistoryBookStack(Object buf) {
@@ -455,6 +605,11 @@ public final class MineClawdClientNetworking {
                 text.append(parseSimpleStyledTextElement(child));
             }
         }
+        if (object.has("children") && object.get("children").isJsonArray()) {
+            for (JsonElement child : object.getAsJsonArray("children")) {
+                text.append(parseSimpleStyledTextElement(child));
+            }
+        }
 
         return text;
     }
@@ -463,36 +618,118 @@ public final class MineClawdClientNetworking {
         if (text == null || object == null) {
             return;
         }
-        if (object.has("color") && object.get("color").isJsonPrimitive()) {
-            Formatting formatting = Formatting.byName(object.get("color").getAsString());
-            if (formatting != null) {
-                text.formatted(formatting);
-            }
+        net.minecraft.text.Style style = text.getStyle();
+        if (object.has("color")) {
+            style = applySimpleColor(style, object.get("color"));
         }
         if (isStyleFlagEnabled(object, "bold")) {
-            text.formatted(Formatting.BOLD);
+            style = style.withBold(true);
         }
         if (isStyleFlagEnabled(object, "italic")) {
-            text.formatted(Formatting.ITALIC);
+            style = style.withItalic(true);
         }
         if (isStyleFlagEnabled(object, "underlined")) {
-            text.formatted(Formatting.UNDERLINE);
+            style = style.withUnderline(true);
         }
         if (isStyleFlagEnabled(object, "strikethrough")) {
-            text.formatted(Formatting.STRIKETHROUGH);
+            style = style.withStrikethrough(true);
         }
         if (isStyleFlagEnabled(object, "obfuscated")) {
-            text.formatted(Formatting.OBFUSCATED);
+            style = style.withObfuscated(true);
         }
+        text.setStyle(style);
     }
 
     private static boolean isStyleFlagEnabled(JsonObject object, String key) {
-        return object != null
-                && key != null
-                && object.has(key)
-                && object.get(key).isJsonPrimitive()
-                && object.get(key).getAsJsonPrimitive().isBoolean()
-                && object.get(key).getAsBoolean();
+        if (object == null || key == null) {
+            return false;
+        }
+        if (isJsonTruthValue(object.get(key))) {
+            return true;
+        }
+        JsonObject decorations = object.has("decorations") && object.get("decorations").isJsonObject()
+                ? object.getAsJsonObject("decorations")
+                : null;
+        if (decorations == null) {
+            return false;
+        }
+        if (isJsonTruthValue(decorations.get(key))) {
+            return true;
+        }
+        if (isJsonTruthValue(decorations.get(key.toLowerCase(Locale.ROOT)))) {
+            return true;
+        }
+        return isJsonTruthValue(decorations.get(key.toUpperCase(Locale.ROOT)));
+    }
+
+    private static boolean isJsonTruthValue(JsonElement element) {
+        if (element == null || element.isJsonNull()) {
+            return false;
+        }
+        if (element.isJsonPrimitive()) {
+            if (element.getAsJsonPrimitive().isBoolean()) {
+                return element.getAsBoolean();
+            }
+            if (element.getAsJsonPrimitive().isString()) {
+                return "true".equalsIgnoreCase(element.getAsString());
+            }
+            if (element.getAsJsonPrimitive().isNumber()) {
+                return element.getAsInt() != 0;
+            }
+            return false;
+        }
+        if (!element.isJsonObject()) {
+            return false;
+        }
+        JsonObject object = element.getAsJsonObject();
+        if (object.has("value")) {
+            return isJsonTruthValue(object.get("value"));
+        }
+        if (object.has("state")) {
+            return isJsonTruthValue(object.get("state"));
+        }
+        if (object.has("enabled")) {
+            return isJsonTruthValue(object.get("enabled"));
+        }
+        return false;
+    }
+
+    private static net.minecraft.text.Style applySimpleColor(net.minecraft.text.Style style, JsonElement colorElement) {
+        if (style == null || colorElement == null || colorElement.isJsonNull()) {
+            return style;
+        }
+        if (colorElement.isJsonObject()) {
+            JsonObject colorObject = colorElement.getAsJsonObject();
+            if (colorObject.has("value")) {
+                return applySimpleColor(style, colorObject.get("value"));
+            }
+            if (colorObject.has("hex")) {
+                return applySimpleColor(style, colorObject.get("hex"));
+            }
+            if (colorObject.has("name")) {
+                return applySimpleColor(style, colorObject.get("name"));
+            }
+            return style;
+        }
+        if (!colorElement.isJsonPrimitive()) {
+            return style;
+        }
+        String rawColor = colorElement.getAsString();
+        if (rawColor == null || rawColor.isBlank()) {
+            return style;
+        }
+        Formatting formatting = Formatting.byName(rawColor.toLowerCase(Locale.ROOT));
+        if (formatting != null) {
+            return style.withColor(formatting);
+        }
+        if (rawColor.startsWith("#") && rawColor.length() == 7) {
+            try {
+                int rgb = Integer.parseInt(rawColor.substring(1), 16);
+                return style.withColor(TextColor.fromRgb(rgb));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return style;
     }
 
     private static Object resolveRegistryLookup(Class<?> expectedType) {

@@ -1,5 +1,7 @@
 package com.mineclawd.config;
 
+import com.mineclawd.MineClawdClientNetworking;
+import com.mineclawd.client.AgentResponseOverlay;
 import com.mineclawd.player.PlayerSettingsManager.RequestBroadcastTarget;
 import dev.isxander.yacl3.api.ConfigCategory;
 import dev.isxander.yacl3.api.Option;
@@ -161,6 +163,13 @@ public final class MineClawdConfigScreen {
                         .formatValue(value -> Text.literal(value.displayName())))
                 .build();
 
+        Option<Boolean> enableGuiOption = Option.<Boolean>createBuilder()
+                .name(Text.literal("Enable GUI"))
+                .description(OptionDescription.of(Text.literal("Client-side MineClawd GUI overlays/screens. OFF behaves like a non-modded client for GUI features, but keeps dynamic placeholder item/block/fluid support.")))
+                .binding(defaults.enableGui, () -> config.enableGui, value -> config.enableGui = value)
+                .controller(BooleanControllerBuilder::create)
+                .build();
+
         Option<RequestBroadcastTarget> broadcastTargetOption = Option.<RequestBroadcastTarget>createBuilder()
                 .name(Text.literal("Broadcast Requests To"))
                 .description(OptionDescription.of(Text.literal("Who sees your '<Player> @MineClawd ...' line and task start/finish status. Only available while connected to a MineClawd server.")))
@@ -222,6 +231,7 @@ public final class MineClawdConfigScreen {
                         .name(Text.literal("Misc"))
                         .group(OptionGroup.createBuilder()
                                 .name(Text.literal("Agent"))
+                                .option(enableGuiOption)
                                 .option(debugModeOption)
                                 .option(limitToolCallsOption)
                                 .option(toolCallLimitOption)
@@ -234,12 +244,14 @@ public final class MineClawdConfigScreen {
                         .build())
                 .save(() -> {
                     MineClawdConfig.HANDLER.save();
+                    MineClawdClientNetworking.sendClientGuiPreferenceSync();
                     RequestBroadcastTarget selected = broadcastTarget.get() == null
                             ? RequestBroadcastTarget.SELF
                             : broadcastTarget.get();
                     cachedBroadcastTarget = selected;
-                    if (broadcastTargetSyncedFromServer) {
-                        MinecraftClient client = MinecraftClient.getInstance();
+                    MinecraftClient client = MinecraftClient.getInstance();
+                    AgentResponseOverlay.onClientGuiPreferenceChanged(client, config.enableGui);
+                    if (broadcastTargetSyncedFromServer && config.enableGui) {
                         if (client.player != null && client.player.networkHandler != null) {
                             client.player.networkHandler.sendChatCommand(
                                     "mineclawd config broadcast-requests-to " + selected.commandValue()

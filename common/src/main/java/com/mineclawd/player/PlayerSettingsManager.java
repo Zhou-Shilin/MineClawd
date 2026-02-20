@@ -25,6 +25,7 @@ public final class PlayerSettingsManager {
     private final Path filePath;
     private boolean loaded;
     private final Map<String, RequestBroadcastTarget> requestBroadcastTargets = new HashMap<>();
+    private final Map<String, Boolean> assistiveTouchEnabled = new HashMap<>();
 
     public PlayerSettingsManager() {
         Path root = Platform.getGameFolder().resolve("mineclawd");
@@ -51,12 +52,33 @@ public final class PlayerSettingsManager {
         save();
     }
 
+    public synchronized boolean isAssistiveTouchEnabled(String playerKey) {
+        ensureLoaded();
+        String key = normalizePlayerKey(playerKey);
+        if (key.isBlank()) {
+            return true;
+        }
+        return assistiveTouchEnabled.getOrDefault(key, Boolean.TRUE);
+    }
+
+    public synchronized void setAssistiveTouchEnabled(String playerKey, boolean enabled) {
+        ensureLoaded();
+        String key = normalizePlayerKey(playerKey);
+        if (key.isBlank() || enabled) {
+            assistiveTouchEnabled.remove(key);
+        } else {
+            assistiveTouchEnabled.put(key, Boolean.FALSE);
+        }
+        save();
+    }
+
     private void ensureLoaded() {
         if (loaded) {
             return;
         }
         loaded = true;
         requestBroadcastTargets.clear();
+        assistiveTouchEnabled.clear();
         ensureDirectory();
         if (!Files.isRegularFile(filePath)) {
             return;
@@ -79,6 +101,26 @@ public final class PlayerSettingsManager {
                     requestBroadcastTargets.put(normalizedKey, target);
                 }
             }
+            if (root.has("assistiveTouchEnabled") && root.get("assistiveTouchEnabled").isJsonObject()) {
+                JsonObject assists = root.getAsJsonObject("assistiveTouchEnabled");
+                for (String key : assists.keySet()) {
+                    String normalizedKey = normalizePlayerKey(key);
+                    if (normalizedKey.isBlank()) {
+                        continue;
+                    }
+                    try {
+                        if (!assists.get(key).isJsonPrimitive()
+                                || !assists.get(key).getAsJsonPrimitive().isBoolean()) {
+                            continue;
+                        }
+                        boolean enabled = assists.get(key).getAsBoolean();
+                        if (!enabled) {
+                            assistiveTouchEnabled.put(normalizedKey, Boolean.FALSE);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
         } catch (Exception exception) {
             MineClawd.LOGGER.warn("Failed to read player settings {}: {}", filePath, exception.getMessage());
         }
@@ -95,6 +137,14 @@ public final class PlayerSettingsManager {
             targets.addProperty(entry.getKey(), entry.getValue().commandValue());
         }
         root.add("requestBroadcastTargets", targets);
+        JsonObject assists = new JsonObject();
+        for (Map.Entry<String, Boolean> entry : assistiveTouchEnabled.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank() || entry.getValue() == null) {
+                continue;
+            }
+            assists.addProperty(entry.getKey(), entry.getValue());
+        }
+        root.add("assistiveTouchEnabled", assists);
         try {
             Files.writeString(
                     filePath,
