@@ -25,6 +25,8 @@ allprojects {
         maven { url 'https://maven.isxander.dev/releases' }
         maven { url 'https://maven.terraformersmc.com/' }
         maven { url 'https://thedarkcolour.github.io/KotlinForForge/' }
+        maven { url 'https://maven.latvian.dev/releases' }
+        maven { url 'https://jitpack.io' }
         maven { url 'https://api.modrinth.com/maven' }
         maven { url 'https://repo.minebench.de/' }
         mavenCentral()
