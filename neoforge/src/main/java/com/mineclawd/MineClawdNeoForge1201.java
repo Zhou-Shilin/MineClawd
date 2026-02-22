@@ -1,9 +1,9 @@
 package com.mineclawd;
 
-import com.mineclawd.config.MineClawdConfigScreen;
 import dev.architectury.platform.forge.EventBuses;
 import dev.architectury.utils.Env;
 import dev.architectury.utils.EnvExecutor;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.client.ConfigScreenHandler;
 import net.minecraftforge.fml.common.Mod;
@@ -18,11 +18,31 @@ public final class MineClawdNeoForge1201 {
         MineClawd.init();
 
         EnvExecutor.runInEnv(Env.CLIENT, () -> () -> {
-            ModLoadingContext.get().registerExtensionPoint(
-                    ConfigScreenHandler.ConfigScreenFactory.class,
-                    () -> new ConfigScreenHandler.ConfigScreenFactory((client, parent) -> MineClawdConfigScreen.create(parent))
-            );
+            if (hasClass("dev.isxander.yacl3.api.YetAnotherConfigLib")) {
+                ModLoadingContext.get().registerExtensionPoint(
+                        ConfigScreenHandler.ConfigScreenFactory.class,
+                        () -> new ConfigScreenHandler.ConfigScreenFactory((client, parent) -> createConfigScreen(parent))
+                );
+            }
             MineClawdNeoForge1201Client.init(modEventBus);
         });
+    }
+
+    private static boolean hasClass(String className) {
+        try {
+            Class.forName(className, false, MineClawdNeoForge1201.class.getClassLoader());
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static Screen createConfigScreen(Screen parent) {
+        try {
+            Class<?> configScreenClass = Class.forName("com.mineclawd.config.MineClawdConfigScreen");
+            return (Screen) configScreenClass.getMethod("create", Screen.class).invoke(null, parent);
+        } catch (ReflectiveOperationException ignored) {
+            return parent;
+        }
     }
 }
