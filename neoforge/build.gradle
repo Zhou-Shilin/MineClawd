@@ -23,30 +23,12 @@ dependencies {
     forge "net.neoforged:forge:${rootProject.forge_version}"
     modApi "dev.architectury:architectury-forge:${rootProject.architectury_api_version}"
 
-    modImplementation("dev.isxander:yet-another-config-lib:${rootProject.yacl_forge_version}") {
-        exclude group: "thedarkcolour"
-        exclude group: "net.neoforged.fancymodloader", module: "loader"
-        exclude group: "cpw.mods", module: "modlauncher"
-        exclude group: "cpw.mods", module: "securejarhandler"
-        exclude group: "net.fabricmc", module: "sponge-mixin"
-        exclude group: "net.neoforged", module: "coremods"
-    }
-    modImplementation("maven.modrinth:better-modlist:${rootProject.better_modlist_forge_version}") {
-        exclude group: "thedarkcolour"
-        exclude group: "net.neoforged.fancymodloader", module: "loader"
-    }
-    modImplementation "maven.modrinth:kubejs:${rootProject.kubejs_forge_version}"
-    modImplementation "maven.modrinth:rhino:${rootProject.rhino_forge_version}"
+    modCompileOnly "dev.isxander:yet-another-config-lib:${rootProject.yacl_forge_version}"
+    modCompileOnly "maven.modrinth:better-modlist:${rootProject.better_modlist_forge_version}"
+    modCompileOnly "dev.latvian.mods:kubejs-forge:${rootProject.kubejs_forge_version}"
+    modCompileOnly "dev.latvian.mods:rhino-forge:${rootProject.rhino_forge_version}"
 
-    forgeRuntimeLibrary "org.quiltmc.parsers:gson:0.2.1"
-    forgeRuntimeLibrary "org.quiltmc.parsers:json:0.2.1"
-    forgeRuntimeLibrary "com.twelvemonkeys.imageio:imageio-webp:3.12.0"
-    forgeRuntimeLibrary "com.twelvemonkeys.imageio:imageio-metadata:3.12.0"
-    forgeRuntimeLibrary "com.twelvemonkeys.imageio:imageio-core:3.12.0"
-    forgeRuntimeLibrary "com.twelvemonkeys.common:common-image:3.12.0"
-    forgeRuntimeLibrary "com.twelvemonkeys.common:common-io:3.12.0"
-    forgeRuntimeLibrary "com.twelvemonkeys.common:common-lang:3.12.0"
-    forgeRuntimeLibrary "org.jetbrains.kotlin:kotlin-stdlib:2.0.21"
+    forgeRuntimeLibrary "de.themoep:minedown-adventure:${rootProject.minedown_version}"
     forgeRuntimeLibrary "net.kyori:adventure-api:${rootProject.adventure_version}"
     forgeRuntimeLibrary "net.kyori:adventure-key:${rootProject.adventure_version}"
     forgeRuntimeLibrary "net.kyori:adventure-text-serializer-gson:${rootProject.adventure_version}"

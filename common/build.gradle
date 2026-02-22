@@ -13,9 +13,9 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
     modApi "dev.architectury:architectury:${rootProject.architectury_api_version}"
 
-    modApi "dev.isxander:yet-another-config-lib:${rootProject.yacl_fabric_version}"
-    modApi "maven.modrinth:kubejs:${rootProject.kubejs_fabric_version}"
-    modApi "maven.modrinth:rhino:${rootProject.rhino_fabric_version}"
+    modCompileOnly "dev.isxander:yet-another-config-lib:${rootProject.yacl_fabric_version}"
+    modCompileOnly "maven.modrinth:kubejs:${rootProject.kubejs_fabric_version}"
+    modCompileOnly "maven.modrinth:rhino:${rootProject.rhino_fabric_version}"
 
     implementation "de.themoep:minedown-adventure:${rootProject.minedown_version}"
     include "de.themoep:minedown-adventure:${rootProject.minedown_version}"
