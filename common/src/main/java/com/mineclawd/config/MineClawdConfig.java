@@ -1,10 +1,15 @@
 package com.mineclawd.config;
 
-import dev.isxander.yacl3.config.v2.api.ConfigClassHandler;
-import dev.isxander.yacl3.config.v2.api.SerialEntry;
-import dev.isxander.yacl3.config.v2.api.serializer.GsonConfigSerializerBuilder;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import dev.architectury.platform.Platform;
-import net.minecraft.util.Identifier;
+
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public class MineClawdConfig {
     public enum LlmProvider {
@@ -38,60 +43,121 @@ public class MineClawdConfig {
         }
     }
 
-    public static final ConfigClassHandler<MineClawdConfig> HANDLER = ConfigClassHandler.createBuilder(MineClawdConfig.class)
-            .id(Identifier.of("mineclawd", "config"))
-            .serializer(config -> GsonConfigSerializerBuilder.create(config)
-                    .setPath(Platform.getConfigFolder().resolve("mineclawd.json5"))
-                    .setJson5(true)
-                    .build())
-            .build();
+    public static final ConfigHandler HANDLER = new ConfigHandler(
+            Platform.getConfigFolder().resolve("mineclawd.json5")
+    );
 
-    @SerialEntry(comment = "LLM provider selection.")
     public LlmProvider provider = LlmProvider.OPENAI;
-
-    @SerialEntry(comment = "OpenAI-compatible API base URL (no trailing slash).")
     public String endpoint = "https://api.openai.com/v1";
-
-    @SerialEntry(comment = "OpenAI API key.")
     public String apiKey = "";
-
-    @SerialEntry(comment = "OpenAI model name (e.g., gpt-5.2).")
     public String model = "gpt-5.2";
-
-    @SerialEntry(comment = "OpenAI summarize model used to generate session titles.")
     public String summarizeModel = "gpt-5.2";
-
-    @SerialEntry(comment = "Vertex AI express mode API base URL (no trailing slash).")
     public String vertexEndpoint = "https://aiplatform.googleapis.com/v1";
-
-    @SerialEntry(comment = "Vertex AI API key (express mode).")
     public String vertexApiKey = "";
-
-    @SerialEntry(comment = "Vertex AI model name or full path (e.g., publishers/google/models/gemini-3-pro-preview).")
     public String vertexModel = "gemini-3.1-pro-preview";
-
-    @SerialEntry(comment = "Vertex AI summarize model used to generate session titles.")
     public String vertexSummarizeModel = "gemini-3-flash-preview";
-
-    @SerialEntry(comment = "Enable debug logging for LLM responses and tool calls.")
     public boolean debugMode = false;
-
-    @SerialEntry(comment = "Whether to limit maximum tool call rounds per request.")
     public boolean limitToolCalls = false;
-
-    @SerialEntry(comment = "Maximum tool call rounds per request (1-20).")
     public int toolCallLimit = 16;
-
-    @SerialEntry(comment = "Advanced: custom system prompt. Leave blank to use MineClawd default prompt.")
     public String systemPrompt = "";
-
-    @SerialEntry(comment = "Dynamic placeholder registry mode. AUTO enables it in single-player client runtime and disables it on dedicated servers. WARNING: when ENABLED on a dedicated server, joining clients must also install MineClawd.")
     public DynamicRegistryMode dynamicRegistryMode = DynamicRegistryMode.AUTO;
-
-    @SerialEntry(comment = "Client-only: enable MineClawd GUI overlays/screens. When false, GUI behaves like a non-modded client while dynamic content sync remains active.")
     public boolean enableGui = true;
 
     public static MineClawdConfig get() {
         return HANDLER.instance();
+    }
+
+    public static final class ConfigHandler {
+        private static final Gson GSON = new GsonBuilder()
+                .setPrettyPrinting()
+                .disableHtmlEscaping()
+                .create();
+
+        private final Path path;
+        private final MineClawdConfig defaults = new MineClawdConfig();
+        private MineClawdConfig instance = new MineClawdConfig();
+
+        private ConfigHandler(Path path) {
+            this.path = path;
+        }
+
+        public synchronized void load() {
+            MineClawdConfig loaded = null;
+            if (Files.exists(path)) {
+                try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+                    loaded = GSON.fromJson(reader, MineClawdConfig.class);
+                } catch (IOException ignored) {
+                }
+            }
+            instance = mergeWithDefaults(loaded);
+        }
+
+        public synchronized void save() {
+            instance.toolCallLimit = Math.max(1, Math.min(20, instance.toolCallLimit));
+            try {
+                Path parent = path.getParent();
+                if (parent != null) {
+                    Files.createDirectories(parent);
+                }
+                try (Writer writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+                    GSON.toJson(instance, writer);
+                }
+            } catch (IOException ignored) {
+            }
+        }
+
+        public synchronized MineClawdConfig defaults() {
+            return mergeWithDefaults(defaults);
+        }
+
+        public synchronized MineClawdConfig instance() {
+            return instance;
+        }
+
+        private static MineClawdConfig mergeWithDefaults(MineClawdConfig loaded) {
+            MineClawdConfig merged = new MineClawdConfig();
+            if (loaded == null) {
+                return merged;
+            }
+
+            if (loaded.provider != null) {
+                merged.provider = loaded.provider;
+            }
+            if (loaded.endpoint != null) {
+                merged.endpoint = loaded.endpoint;
+            }
+            if (loaded.apiKey != null) {
+                merged.apiKey = loaded.apiKey;
+            }
+            if (loaded.model != null) {
+                merged.model = loaded.model;
+            }
+            if (loaded.summarizeModel != null) {
+                merged.summarizeModel = loaded.summarizeModel;
+            }
+            if (loaded.vertexEndpoint != null) {
+                merged.vertexEndpoint = loaded.vertexEndpoint;
+            }
+            if (loaded.vertexApiKey != null) {
+                merged.vertexApiKey = loaded.vertexApiKey;
+            }
+            if (loaded.vertexModel != null) {
+                merged.vertexModel = loaded.vertexModel;
+            }
+            if (loaded.vertexSummarizeModel != null) {
+                merged.vertexSummarizeModel = loaded.vertexSummarizeModel;
+            }
+            merged.debugMode = loaded.debugMode;
+            merged.limitToolCalls = loaded.limitToolCalls;
+            merged.toolCallLimit = Math.max(1, Math.min(20, loaded.toolCallLimit));
+            if (loaded.systemPrompt != null) {
+                merged.systemPrompt = loaded.systemPrompt;
+            }
+            if (loaded.dynamicRegistryMode != null) {
+                merged.dynamicRegistryMode = loaded.dynamicRegistryMode;
+            }
+            merged.enableGui = loaded.enableGui;
+            return merged;
+        }
     }
 }
