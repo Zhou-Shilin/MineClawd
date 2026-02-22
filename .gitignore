@@ -19,6 +19,7 @@ bin/
 
 # Fabric / Loom / KubeJS specific
 /kubejs/server_scripts/mineclawd-internal-api.js
+run/
 
 # IDEs
 /.idea/
