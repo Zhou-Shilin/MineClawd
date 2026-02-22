@@ -58,7 +58,6 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtList;
 import net.minecraft.nbt.NbtString;
 import net.minecraft.network.PacketByteBuf;
-import net.minecraft.network.RegistryByteBuf;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
@@ -567,7 +566,7 @@ public class MineClawd {
             return;
         }
         boolean enabled = PLAYER_SETTINGS.isAssistiveTouchEnabled(player.getUuidAsString());
-        var payload = new RegistryByteBuf(Unpooled.buffer(), player.getServerWorld().getRegistryManager());
+        var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeBoolean(enabled);
         NetworkManager.sendToPlayer(player, MineClawdNetworking.SYNC_ASSISTIVE_TOUCH, payload);
     }
@@ -1029,7 +1028,7 @@ public class MineClawd {
                 personas,
                 payloadAssets
         );
-        var payload = new RegistryByteBuf(Unpooled.buffer(), player.getServerWorld().getRegistryManager());
+        var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeString(payloadString, ASSETS_PACKET_MAX_CHARS);
         NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_ASSETS, payload);
     }
@@ -1378,7 +1377,7 @@ public class MineClawd {
                 historyItems
         );
 
-        var payload = new RegistryByteBuf(Unpooled.buffer(), player.getServerWorld().getRegistryManager());
+        var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeString(payloadString, SESSIONS_PACKET_MAX_CHARS);
         NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_SESSIONS, payload);
     }
@@ -2154,7 +2153,7 @@ public class MineClawd {
         if (safePayload.length() > AGENT_STREAM_PACKET_MAX_CHARS) {
             safePayload = safePayload.substring(0, AGENT_STREAM_PACKET_MAX_CHARS);
         }
-        var packet = new RegistryByteBuf(Unpooled.buffer(), player.getServerWorld().getRegistryManager());
+        var packet = new PacketByteBuf(Unpooled.buffer());
         packet.writeString(safeRequestId, AGENT_STREAM_REQUEST_ID_MAX_CHARS);
         packet.writeByte(type.id());
         packet.writeString(safePayload, AGENT_STREAM_PACKET_MAX_CHARS);

@@ -19,7 +19,7 @@ import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
-import net.minecraft.network.RegistryByteBuf;
+import net.minecraft.network.PacketByteBuf;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.OrderedText;
 import net.minecraft.text.Text;
@@ -1529,7 +1529,7 @@ public final class AgentResponseOverlay {
         if (client == null || client.getNetworkHandler() == null) {
             return;
         }
-        RegistryByteBuf buffer = new RegistryByteBuf(Unpooled.buffer(), client.getNetworkHandler().getRegistryManager());
+        PacketByteBuf buffer = new PacketByteBuf(Unpooled.buffer());
         buffer.writeString(payload.toJson());
         NetworkManager.sendToServer(MineClawdNetworking.QUESTION_RESPONSE, buffer);
     }
