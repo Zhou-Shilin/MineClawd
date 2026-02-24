@@ -87,6 +87,42 @@ public final class QuestionPromptScreen extends Screen {
     }
 
     @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (super.keyPressed(keyCode, scanCode, modifiers)) {
+            return true;
+        }
+        // Consume all key events so they don't leak to the underlying screen (e.g. chat)
+        return true;
+    }
+
+    @Override
+    public boolean charTyped(char chr, int modifiers) {
+        if (super.charTyped(chr, modifiers)) {
+            return true;
+        }
+        // Consume all char events so they don't leak to the underlying screen
+        return true;
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double amount) {
+        if (super.mouseScrolled(mouseX, mouseY, amount)) {
+            return true;
+        }
+        // Consume scroll events so they don't leak to the underlying screen (e.g. creative inventory)
+        return true;
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (super.mouseClicked(mouseX, mouseY, button)) {
+            return true;
+        }
+        // Consume all mouse clicks so they don't leak through
+        return true;
+    }
+
+    @Override
     public void close() {
         if (!submitted) {
             if (payload != null) {

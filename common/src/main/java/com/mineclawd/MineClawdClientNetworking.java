@@ -192,32 +192,30 @@ public final class MineClawdClientNetworking {
         ClientScreenInputEvent.MOUSE_CLICKED_PRE.register((client, screen, mouseX, mouseY, button) -> {
             boolean handled = AgentResponseOverlay.mouseClicked(client, mouseX, mouseY, button)
                     || AgentResponseOverlay.capturesMouseInput(client, mouseX, mouseY);
-            return handled ? EventResult.interruptDefault() : EventResult.pass();
+            return handled ? EventResult.interruptFalse() : EventResult.pass();
         });
         ClientScreenInputEvent.MOUSE_RELEASED_PRE.register((client, screen, mouseX, mouseY, button) -> {
             boolean handled = AgentResponseOverlay.mouseReleased(client, mouseX, mouseY, button)
                     || AgentResponseOverlay.capturesMouseInput(client, mouseX, mouseY);
-            return handled ? EventResult.interruptDefault() : EventResult.pass();
+            return handled ? EventResult.interruptFalse() : EventResult.pass();
         });
         ClientScreenInputEvent.MOUSE_DRAGGED_PRE.register((client, screen, mouseX, mouseY, button, dragX, dragY) -> {
             boolean handled = AgentResponseOverlay.mouseDragged(client, mouseX, mouseY, button)
                     || AgentResponseOverlay.capturesMouseInput(client, mouseX, mouseY);
-            return handled ? EventResult.interruptDefault() : EventResult.pass();
+            return handled ? EventResult.interruptFalse() : EventResult.pass();
         });
         ClientScreenInputEvent.MOUSE_SCROLLED_PRE.register((client, screen, mouseX, mouseY, amountY) -> {
             boolean handled = AgentResponseOverlay.mouseScrolled(client, mouseX, mouseY, amountY)
                     || AgentResponseOverlay.capturesMouseInput(client, mouseX, mouseY);
-            return handled ? EventResult.interruptDefault() : EventResult.pass();
+            return handled ? EventResult.interruptFalse() : EventResult.pass();
         });
         ClientScreenInputEvent.KEY_PRESSED_PRE.register((client, screen, keyCode, scanCode, modifiers) -> {
-            boolean handled = AgentResponseOverlay.keyPressed(client, keyCode, scanCode, modifiers)
-                    || AgentResponseOverlay.capturesKeyboardInput(client);
-            return handled ? EventResult.interruptDefault() : EventResult.pass();
+            boolean handled = AgentResponseOverlay.keyPressed(client, keyCode, scanCode, modifiers);
+            return handled ? EventResult.interruptFalse() : EventResult.pass();
         });
         ClientScreenInputEvent.CHAR_TYPED_PRE.register((client, screen, character, keyCode) -> {
-            boolean handled = AgentResponseOverlay.charTyped(client, character, keyCode)
-                    || AgentResponseOverlay.capturesKeyboardInput(client);
-            return handled ? EventResult.interruptDefault() : EventResult.pass();
+            boolean handled = AgentResponseOverlay.charTyped(client, character, keyCode);
+            return handled ? EventResult.interruptFalse() : EventResult.pass();
         });
 
         ClientPlayerEvent.CLIENT_PLAYER_JOIN.register(player -> sendClientReadyPing());

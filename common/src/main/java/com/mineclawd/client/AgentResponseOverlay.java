@@ -669,8 +669,13 @@ public final class AgentResponseOverlay {
     }
 
     public static boolean charTyped(MinecraftClient client, char character, int keyCode) {
-        if (!isOverlayEnabled() || !isInteractive(client) || !visible || minimized || !inputFocused || !shouldRenderInputBar()) {
+        if (!isOverlayEnabled() || !isInteractive(client) || !visible || minimized) {
             return false;
+        }
+        // When input is not focused or input bar is not shown, still consume char events
+        // to prevent them from leaking to the underlying screen (e.g. chat bar)
+        if (!inputFocused || !shouldRenderInputBar()) {
+            return true;
         }
         if (Character.isISOControl(character)) {
             return true;
@@ -680,11 +685,24 @@ public final class AgentResponseOverlay {
     }
 
     public static boolean keyPressed(MinecraftClient client, int keyCode, int scanCode, int modifiers) {
-        if (!isOverlayEnabled() || !isInteractive(client) || !visible || minimized || !shouldRenderInputBar()) {
+        if (!isOverlayEnabled() || !isInteractive(client) || !visible || minimized) {
             return false;
         }
-        if (!inputFocused) {
+        // Allow Escape to pass through to the underlying screen when input is not focused,
+        // so the user can close the chat/pause/creative screen normally
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            if (inputFocused && shouldRenderInputBar()) {
+                inputFocused = false;
+                inputDragSelecting = false;
+                return true;
+            }
+            // Let Escape pass through to close the underlying screen
             return false;
+        }
+        // When the input bar is not shown or not focused, still consume all non-Escape
+        // key events to prevent them from leaking to the underlying screen
+        if (!shouldRenderInputBar() || !inputFocused) {
+            return true;
         }
         boolean ctrl = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0;
         boolean shift = (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
@@ -742,11 +760,6 @@ public final class AgentResponseOverlay {
             if (clipboard != null && !clipboard.isBlank()) {
                 appendInputText(clipboard);
             }
-            return true;
-        }
-        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            inputFocused = false;
-            inputDragSelecting = false;
             return true;
         }
         return true;
@@ -2383,12 +2396,12 @@ public final class AgentResponseOverlay {
     }
 
     public static boolean capturesKeyboardInput(MinecraftClient client) {
+        // When the overlay panel is visible and expanded, capture ALL keyboard input
+        // to prevent it from leaking to the underlying screen (e.g. chat bar, etc.)
         return isOverlayEnabled()
                 && isInteractive(client)
                 && visible
-                && !minimized
-                && shouldRenderInputBar()
-                && inputFocused;
+                && !minimized;
     }
 
     public static boolean capturesMouseInput(MinecraftClient client, double mouseX, double mouseY) {
