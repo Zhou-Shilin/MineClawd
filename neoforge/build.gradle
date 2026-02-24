@@ -37,6 +37,7 @@ dependencies {
     forgeRuntimeLibrary "net.kyori:examination-api:${rootProject.examination_version}"
     forgeRuntimeLibrary "net.kyori:examination-string:${rootProject.examination_version}"
     forgeRuntimeLibrary "net.kyori:option:${rootProject.option_version}"
+    forgeRuntimeLibrary "com.vladsch.flexmark:flexmark-html2md-converter:${rootProject.flexmark_version}"
 
     shadowBundle "de.themoep:minedown-adventure:${rootProject.minedown_version}"
     shadowBundle "net.kyori:adventure-api:${rootProject.adventure_version}"
@@ -47,6 +48,7 @@ dependencies {
     shadowBundle "net.kyori:examination-api:${rootProject.examination_version}"
     shadowBundle "net.kyori:examination-string:${rootProject.examination_version}"
     shadowBundle "net.kyori:option:${rootProject.option_version}"
+    shadowBundle "com.vladsch.flexmark:flexmark-html2md-converter:${rootProject.flexmark_version}"
 }
 
 sourceSets {
