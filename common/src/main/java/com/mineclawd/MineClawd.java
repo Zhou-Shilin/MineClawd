@@ -26,6 +26,7 @@ import com.mineclawd.llm.VertexAIClient;
 import com.mineclawd.llm.VertexAIMessage;
 import com.mineclawd.llm.VertexAIResponse;
 import com.mineclawd.llm.VertexAIToolCall;
+import com.mineclawd.mod.ModToolsExecutor;
 import com.mineclawd.persona.PersonaManager;
 import com.mineclawd.persona.PersonaManager.Persona;
 import com.mineclawd.player.PlayerSettingsManager;
@@ -65,6 +66,7 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.ClickEvent;
+import net.minecraft.text.HoverEvent;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
@@ -75,15 +77,18 @@ import io.netty.buffer.Unpooled;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.URI;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CompletableFuture;
@@ -115,6 +120,9 @@ public class MineClawd {
     private static final String TOOL_APPLY_INSTANT_SERVER_SCRIPT = "apply-instant-server-script";
     private static final String TOOL_ASK_USER = "ask-user-question";
     private static final String TOOL_EXECUTE_COMMAND = "execute-command";
+    private static final String TOOL_LIST_COMMANDS = "list_commands";
+    private static final String TOOL_FETCH_MODRINTH = "fetch_modrinth";
+    private static final String TOOL_FETCH_URL = "fetch_url";
     private static final String TOOL_LIST_SERVER_SCRIPTS = "list-server-scripts";
     private static final String TOOL_READ_SERVER_SCRIPT = "read-server-script";
     private static final String TOOL_WRITE_SERVER_SCRIPT = "write-server-script";
@@ -122,6 +130,7 @@ public class MineClawd {
     private static final String TOOL_RELOAD_GAME = "reload-game";
     private static final String TOOL_SYNC_COMMAND_TREE = "sync-command-tree";
     private static final String TOOL_LIST_DYNAMIC_CONTENT = "list-dynamic-content";
+    private static final String TOOL_LIST_DYNAMIC_PROPERTIES = "list-dynamic-properties";
     private static final String TOOL_REGISTER_DYNAMIC_ITEM = "register-dynamic-item";
     private static final String TOOL_REGISTER_DYNAMIC_BLOCK = "register-dynamic-block";
     private static final String TOOL_REGISTER_DYNAMIC_FLUID = "register-dynamic-fluid";
@@ -150,9 +159,12 @@ public class MineClawd {
     private static final int AGENT_STREAM_REQUEST_ID_MAX_CHARS = 64;
     private static final int AGENT_STREAM_PACKET_MAX_CHARS = 32_767;
     private static final int AGENT_STREAM_CHUNK_CHARS = 3_000;
+    private static final int TOOL_STATUS_CHAT_MAX_CHARS = 180;
+    private static final int TRACE_LOG_MAX_CHARS = 12_000;
     private static final int FAILED_REQUEST_TOKEN_LENGTH = 8;
     private static final long FAILED_REQUEST_TTL_MS = TimeUnit.MINUTES.toMillis(30);
     private static final String HISTORY_BOOK_TITLE = "MineClawd History";
+    private static final String GLOBAL_ASSET_OWNER_KEY = "global";
     private static final GsonComponentSerializer ADVENTURE_GSON = GsonComponentSerializer.gson();
     private static final Pattern MINEDOWN_ACTION_COLON_PATTERN = Pattern.compile(
             "\\((run_command|suggest_command|copy_to_clipboard|change_page|open_url|show_text|hover|insert|show_entity|show_item|custom|show_dialog)\\s*:\\s*",
@@ -198,6 +210,12 @@ public class MineClawd {
         "- `execute-command`: Execute a normal Minecraft command and get command output.",
         "  Prefer this when vanilla commands can solve the task directly (for example: `gamerule`, `time`, `weather`, `tp`, `effect`, `give`, `clear`, `kill`, `summon`, `setblock`, `fill`, `say`, simple checks).",
         "  If command output is enough, do not use KubeJS.",
+        "- `list_commands`: List available root commands, optionally filtered by `mod_id`.",
+        "  Filtered command matching is best-effort based on command names and prefixes.",
+        "- Installed mods are provided in the system prompt under Environment/Installed Mods. Use those ids directly.",
+        "- `fetch_modrinth`: Fetch the Modrinth project page content for an installed mod id.",
+        "- `fetch_url`: Fetch any HTTP(S) page/content by URL. HTML responses are converted to Markdown.",
+        "  Use these tools when you need command usage, config keys, APIs, or behavior details from other mods.",
         "- `apply-instant-server-script`: Execute immediate KubeJS JavaScript on the running server via /_exec_kubejs_internal.",
         "  Use this for instant actions such as checking or editing player inventory, changing nearby blocks, querying entities, and all the one-off server operations. (This is the most commonly used tool.)",
         "Below are tools for managing persistent KubeJS scripts under `kubejs/server_scripts/mineclawd/`. Changes to these scripts persist across reloads and can be used for ongoing behaviors like custom commands, event listeners, and world tick logic.",
@@ -274,9 +292,10 @@ public class MineClawd {
             "In this way, you can 'register' new items, blocks, and fluids with custom properties.",
             "Use these tools:",
             "- `list-dynamic-content`: inspect used and free slots for items/blocks/fluids.",
-            "- `register-dynamic-item`: claim a free item slot. Supports `name`, `material_item` (vanilla item id), and `throwable`.",
-            "- `register-dynamic-block`: claim a free block slot. Supports `name`, `material_block` (vanilla block id), and `friction`.",
-            "- `register-dynamic-fluid`: claim a free fluid slot. Supports `name`, `material_fluid` (vanilla fluid id), and optional pure `color` (#RRGGBB).",
+            "- `list-dynamic-properties`: list editable property keys/ranges for item/block/fluid. Use this before advanced edits to avoid wrong params.",
+            "- `register-dynamic-item`: claim a free item slot with broad item behavior options.",
+            "- `register-dynamic-block`: claim a free block slot with broad physical/sound options.",
+            "- `register-dynamic-fluid`: claim a free fluid slot with broad flow/physics/color options.",
             "- `update-dynamic-item`: update properties on an existing item slot (`slot` required).",
             "- `update-dynamic-block`: update properties on an existing block slot (`slot` required).",
             "- `update-dynamic-fluid`: update properties on an existing fluid slot (`slot` required).",
@@ -288,7 +307,7 @@ public class MineClawd {
             "4. For `material_item`, `material_block`, and `material_fluid`, pick a vanilla ID that is semantically related to the requested feature; avoid unrelated defaults.",
             "5. After each dynamic register/update, run an actual in-game verification and inspect real world state/output before claiming success.",
             "6. For temporary validation setups (for example a test block high above the player), clean up immediately and restore modified blocks.",
-            "7. For advanced behavior beyond provided properties, combine this with KubeJS scripts."
+            "7. For advanced behavior beyond provided properties, combine this with KubeJS scripts. However, always prefer native dynamic registry properties when possible."
     );
     private static final String ASSET_TRACKING_PROMPT_APPENDIX = String.join("\n",
             "Asset tracking workflow:",
@@ -909,6 +928,7 @@ public class MineClawd {
 
         if (source.getEntity() instanceof ServerPlayerEntity player
                 && canUseAssistiveOverlay(player, MineClawdNetworking.AGENT_STREAM_EVENT)) {
+            sendAgentStreamPacket(player, requestId, AgentStreamEventType.TOOL_STATUS_CLEAR, "");
             sendAgentStreamPacket(player, requestId, AgentStreamEventType.ERROR, "Generation stopped by user.");
             sendAgentStreamPacket(player, requestId, AgentStreamEventType.DONE, "");
         }
@@ -959,7 +979,7 @@ public class MineClawd {
             return 1;
         }
 
-        List<AssetRecord> assets = ASSETS_MANAGER.list(sessionOwnerKey(source));
+        List<AssetRecord> assets = ASSETS_MANAGER.list(assetOwnerKey());
         if (assets.isEmpty()) {
             sendAgentMessage(source, "No assets tracked yet. Agent should use `upsert-asset-record` after creating content.");
             return 1;
@@ -988,8 +1008,8 @@ public class MineClawd {
             return;
         }
 
-        String ownerKey = sessionOwnerKey(source);
-        List<AssetRecord> assets = ASSETS_MANAGER.list(ownerKey);
+        String requestOwnerKey = sessionOwnerKey(source);
+        List<AssetRecord> assets = ASSETS_MANAGER.list(assetOwnerKey());
         List<AssetsOverlayPayload.AssetItem> payloadAssets = new ArrayList<>();
         for (AssetRecord asset : assets) {
             if (asset == null) {
@@ -1016,9 +1036,9 @@ public class MineClawd {
             ));
         }
 
-        SessionData activeSession = SESSION_MANAGER.loadActiveSession(ownerKey);
+        SessionData activeSession = SESSION_MANAGER.loadActiveSession(requestOwnerKey);
         String activeSessionId = activeSession == null ? "" : activeSession.id();
-        String activePersona = PERSONA_MANAGER.getActiveSoulName(ownerKey);
+        String activePersona = PERSONA_MANAGER.getActiveSoulName(requestOwnerKey);
         List<String> personas = PERSONA_MANAGER.listSoulNames();
 
         String payloadString = buildAssetsOverlayPayloadJson(
@@ -1074,7 +1094,7 @@ public class MineClawd {
         if (source == null || !isOp(source)) {
             return Suggestions.empty();
         }
-        List<AssetRecord> assets = ASSETS_MANAGER.list(sessionOwnerKey(source));
+        List<AssetRecord> assets = ASSETS_MANAGER.list(assetOwnerKey());
         if (assets.isEmpty()) {
             return Suggestions.empty();
         }
@@ -1102,7 +1122,7 @@ public class MineClawd {
             source.sendError(Text.literal("MineClawd: asset reference is required."));
             return 0;
         }
-        String ownerKey = sessionOwnerKey(source);
+        String ownerKey = assetOwnerKey();
         AssetRecord record = ASSETS_MANAGER.resolve(ownerKey, reference);
         if (record == null) {
             source.sendError(Text.literal("MineClawd: asset not found. Use `/mineclawd assets` to inspect ids."));
@@ -1130,7 +1150,7 @@ public class MineClawd {
             source.sendError(Text.literal("MineClawd: this command must be executed by a player."));
             return 0;
         }
-        String ownerKey = sessionOwnerKey(source);
+        String ownerKey = assetOwnerKey();
         AssetRecord record = ASSETS_MANAGER.resolve(ownerKey, reference);
         if (record == null) {
             source.sendError(Text.literal("MineClawd: asset not found. Use `/mineclawd assets` to inspect ids."));
@@ -1222,7 +1242,7 @@ public class MineClawd {
             source.sendError(Text.literal("MineClawd: this command must be executed by a player."));
             return 0;
         }
-        String ownerKey = sessionOwnerKey(source);
+        String ownerKey = assetOwnerKey();
         AssetRecord record = ASSETS_MANAGER.resolve(ownerKey, reference);
         if (record == null) {
             source.sendError(Text.literal("MineClawd: asset not found. Use `/mineclawd assets` to inspect ids."));
@@ -1930,6 +1950,7 @@ public class MineClawd {
         if (runtime.limitToolCallsEnabled()) {
             debugLog(runtime, "Tool call limit: %d", runtime.toolLimit());
         }
+        traceLog(runtime, "USER", request);
         sendPromptEcho(source, request);
         sendTaskStatus(source, true);
         if (runtime.clientStreamEnabled()) {
@@ -1969,6 +1990,7 @@ public class MineClawd {
             }
         } catch (Exception e) {
             if (runtime.clientStreamEnabled()) {
+                clearToolCallProgress(source, runtime);
                 sendAgentStreamEvent(source, runtime, AgentStreamEventType.ERROR, "MineClawd failed to start request: " + e.getMessage());
                 sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
             } else {
@@ -2167,6 +2189,7 @@ public class MineClawd {
         }
         String normalized = message == null || message.isBlank() ? "unknown error" : message;
         if (runtime != null && runtime.clientStreamEnabled()) {
+            clearToolCallProgress(source, runtime);
             sendAgentStreamEvent(source, runtime, AgentStreamEventType.ERROR, "Oops! " + normalized);
             sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
         } else if (source != null) {
@@ -2320,6 +2343,9 @@ public class MineClawd {
         String text = response.text();
         debugLog(runtime, "OpenAI response text: %s", text == null ? "(null)" : text);
         debugLog(runtime, "OpenAI round=%d tool_calls=%d", depth + 1, response.toolCalls() == null ? 0 : response.toolCalls().size());
+        if (text != null && !text.isBlank()) {
+            traceLog(runtime, "ASSISTANT", text);
+        }
         if (response.toolCalls() != null && !response.toolCalls().isEmpty()) {
             for (OpenAIToolCall call : response.toolCalls()) {
                 debugLog(runtime, "OpenAI tool call: id=%s name=%s args=%s",
@@ -2387,6 +2413,7 @@ public class MineClawd {
             maybeGenerateSessionTitle(source, MineClawdConfig.get(), MineClawdConfig.LlmProvider.OPENAI, session, text, runtime);
         }
         if (runtime.clientStreamEnabled()) {
+            clearToolCallProgress(source, runtime);
             sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
         }
         sendTaskStatus(source, false);
@@ -2506,6 +2533,9 @@ public class MineClawd {
         String text = response.text();
         debugLog(runtime, "Vertex response text: %s", text == null ? "(null)" : text);
         debugLog(runtime, "Vertex round=%d tool_calls=%d", depth + 1, response.toolCalls() == null ? 0 : response.toolCalls().size());
+        if (text != null && !text.isBlank()) {
+            traceLog(runtime, "ASSISTANT", text);
+        }
         if (response.toolCalls() != null && !response.toolCalls().isEmpty()) {
             for (VertexAIToolCall call : response.toolCalls()) {
                 debugLog(runtime, "Vertex tool call: name=%s args=%s",
@@ -2574,6 +2604,7 @@ public class MineClawd {
             maybeGenerateSessionTitle(source, MineClawdConfig.get(), MineClawdConfig.LlmProvider.VERTEX_AI, session, text, runtime);
         }
         if (runtime.clientStreamEnabled()) {
+            clearToolCallProgress(source, runtime);
             sendAgentStreamEvent(source, runtime, AgentStreamEventType.DONE, "");
         }
         sendTaskStatus(source, false);
@@ -2618,6 +2649,9 @@ public class MineClawd {
 
         JsonObject args = parseToolArguments(call.arguments());
         int callIndex = index + 1;
+        ToolStatusDescriptor statusDescriptor = announceToolCallProgress(source, runtime, call.name(), args);
+        ToolStatusDescriptor completionDescriptor = buildToolStatusCompletedDescriptor(call.name(), args);
+        traceLog(runtime, "TOOL_CALL", "name=" + safeForLog(call.name()) + " args=" + args);
         debugLog(runtime, "Executing tool (OpenAI) #%d name=%s args=%s", callIndex, call.name(), args);
         return executeToolCallAsync(source, call.name(), args, runtime)
                 .handle((output, throwable) -> {
@@ -2627,6 +2661,8 @@ public class MineClawd {
                     } else if (finalOutput == null || finalOutput.isBlank()) {
                         finalOutput = "ERROR: Tool returned empty output.";
                     }
+                    clearToolCallProgress(source, runtime, completionDescriptor == null ? statusDescriptor : completionDescriptor);
+                    traceLog(runtime, "TOOL_RESULT", "name=" + safeForLog(call.name()) + " output=" + finalOutput);
                     debugLog(runtime, "Tool output #%d: %s", callIndex, finalOutput);
                     String toolCallId = call.id();
                     if (toolCallId == null || toolCallId.isBlank()) {
@@ -2694,6 +2730,9 @@ public class MineClawd {
 
         JsonObject args = call.args() == null ? new JsonObject() : call.args();
         int callIndex = index + 1;
+        ToolStatusDescriptor statusDescriptor = announceToolCallProgress(source, runtime, call.name(), args);
+        ToolStatusDescriptor completionDescriptor = buildToolStatusCompletedDescriptor(call.name(), args);
+        traceLog(runtime, "TOOL_CALL", "name=" + safeForLog(call.name()) + " args=" + args);
         debugLog(runtime, "Executing tool (Vertex) #%d name=%s args=%s", callIndex, call.name(), args);
         return executeToolCallAsync(source, call.name(), args, runtime)
                 .handle((output, throwable) -> {
@@ -2703,6 +2742,8 @@ public class MineClawd {
                     } else if (finalOutput == null || finalOutput.isBlank()) {
                         finalOutput = "ERROR: Tool returned empty output.";
                     }
+                    clearToolCallProgress(source, runtime, completionDescriptor == null ? statusDescriptor : completionDescriptor);
+                    traceLog(runtime, "TOOL_RESULT", "name=" + safeForLog(call.name()) + " output=" + finalOutput);
                     debugLog(runtime, "Tool output #%d: %s", callIndex, finalOutput);
                     JsonObject response = new JsonObject();
                     response.addProperty("result", finalOutput);
@@ -2762,6 +2803,23 @@ public class MineClawd {
                 }
                 result = KubeJsToolExecutor.executeCommand(source, command);
                 break;
+            case TOOL_LIST_COMMANDS:
+                result = ModToolsExecutor.listCommands(source, readOptionalStringArg(args, "mod_id"));
+                break;
+            case TOOL_FETCH_MODRINTH:
+                String modrinthModId = readRequiredStringArg(args, "mod_id");
+                if (modrinthModId == null || modrinthModId.isBlank()) {
+                    return "ERROR: Tool call is missing required string `mod_id`.";
+                }
+                result = ModToolsExecutor.fetchModrinth(modrinthModId);
+                break;
+            case TOOL_FETCH_URL:
+                String docsUrl = readRequiredStringArg(args, "url");
+                if (docsUrl == null || docsUrl.isBlank()) {
+                    return "ERROR: Tool call is missing required string `url`.";
+                }
+                result = ModToolsExecutor.fetchUrl(docsUrl);
+                break;
             case TOOL_LIST_SERVER_SCRIPTS:
                 result = KubeJsToolExecutor.listServerScripts(source);
                 break;
@@ -2799,13 +2857,24 @@ public class MineClawd {
             case TOOL_LIST_DYNAMIC_CONTENT:
                 result = DynamicContentToolExecutor.list();
                 break;
+            case TOOL_LIST_DYNAMIC_PROPERTIES:
+                result = DynamicContentToolExecutor.listProperties(readOptionalStringArg(args, "type"));
+                break;
             case TOOL_REGISTER_DYNAMIC_ITEM:
                 result = DynamicContentToolExecutor.registerItem(
                         source,
                         readOptionalIntArg(args, "slot"),
                         readRequiredStringArg(args, "name"),
                         readRequiredStringArg(args, "material_item"),
-                        readOptionalBooleanArg(args, "throwable")
+                        readOptionalBooleanArg(args, "throwable"),
+                        readOptionalDoubleArg(args, "throw_speed"),
+                        readOptionalDoubleArg(args, "throw_inaccuracy"),
+                        readOptionalIntArg(args, "throw_cooldown_ticks"),
+                        readOptionalBooleanArg(args, "consume_on_throw"),
+                        readOptionalIntArg(args, "max_count"),
+                        readRequiredStringArg(args, "use_action"),
+                        readOptionalIntArg(args, "use_time_ticks"),
+                        readRequiredStringArg(args, "glint_mode")
                 );
                 break;
             case TOOL_REGISTER_DYNAMIC_BLOCK:
@@ -2814,7 +2883,11 @@ public class MineClawd {
                         readOptionalIntArg(args, "slot"),
                         readRequiredStringArg(args, "name"),
                         readRequiredStringArg(args, "material_block"),
-                        readOptionalDoubleArg(args, "friction")
+                        readOptionalDoubleArg(args, "friction"),
+                        readOptionalDoubleArg(args, "velocity_multiplier"),
+                        readOptionalDoubleArg(args, "jump_velocity_multiplier"),
+                        readOptionalDoubleArg(args, "blast_resistance"),
+                        readOptionalBooleanArg(args, "use_material_sounds")
                 );
                 break;
             case TOOL_REGISTER_DYNAMIC_FLUID:
@@ -2823,7 +2896,12 @@ public class MineClawd {
                         readOptionalIntArg(args, "slot"),
                         readRequiredStringArg(args, "name"),
                         readRequiredStringArg(args, "material_fluid"),
-                        readRequiredStringArg(args, "color")
+                        readRequiredStringArg(args, "color"),
+                        readOptionalIntArg(args, "tick_rate"),
+                        readOptionalIntArg(args, "flow_speed"),
+                        readOptionalIntArg(args, "level_decrease_per_block"),
+                        readOptionalDoubleArg(args, "blast_resistance"),
+                        readOptionalBooleanArg(args, "infinite")
                 );
                 break;
             case TOOL_UPDATE_DYNAMIC_ITEM:
@@ -2832,7 +2910,15 @@ public class MineClawd {
                         readOptionalIntArg(args, "slot"),
                         readRequiredStringArg(args, "name"),
                         readRequiredStringArg(args, "material_item"),
-                        readOptionalBooleanArg(args, "throwable")
+                        readOptionalBooleanArg(args, "throwable"),
+                        readOptionalDoubleArg(args, "throw_speed"),
+                        readOptionalDoubleArg(args, "throw_inaccuracy"),
+                        readOptionalIntArg(args, "throw_cooldown_ticks"),
+                        readOptionalBooleanArg(args, "consume_on_throw"),
+                        readOptionalIntArg(args, "max_count"),
+                        readRequiredStringArg(args, "use_action"),
+                        readOptionalIntArg(args, "use_time_ticks"),
+                        readRequiredStringArg(args, "glint_mode")
                 );
                 break;
             case TOOL_UPDATE_DYNAMIC_BLOCK:
@@ -2841,7 +2927,11 @@ public class MineClawd {
                         readOptionalIntArg(args, "slot"),
                         readRequiredStringArg(args, "name"),
                         readRequiredStringArg(args, "material_block"),
-                        readOptionalDoubleArg(args, "friction")
+                        readOptionalDoubleArg(args, "friction"),
+                        readOptionalDoubleArg(args, "velocity_multiplier"),
+                        readOptionalDoubleArg(args, "jump_velocity_multiplier"),
+                        readOptionalDoubleArg(args, "blast_resistance"),
+                        readOptionalBooleanArg(args, "use_material_sounds")
                 );
                 break;
             case TOOL_UPDATE_DYNAMIC_FLUID:
@@ -2850,7 +2940,12 @@ public class MineClawd {
                         readOptionalIntArg(args, "slot"),
                         readRequiredStringArg(args, "name"),
                         readRequiredStringArg(args, "material_fluid"),
-                        readRequiredStringArg(args, "color")
+                        readRequiredStringArg(args, "color"),
+                        readOptionalIntArg(args, "tick_rate"),
+                        readOptionalIntArg(args, "flow_speed"),
+                        readOptionalIntArg(args, "level_decrease_per_block"),
+                        readOptionalDoubleArg(args, "blast_resistance"),
+                        readOptionalBooleanArg(args, "infinite")
                 );
                 break;
             case TOOL_UNREGISTER_DYNAMIC_CONTENT:
@@ -2949,8 +3044,8 @@ public class MineClawd {
         return value.trim();
     }
 
-    private ToolExecutionResult listAssetsTool(String ownerKey) {
-        List<AssetRecord> assets = ASSETS_MANAGER.list(ownerKey);
+    private ToolExecutionResult listAssetsTool(String ignoredOwnerKey) {
+        List<AssetRecord> assets = ASSETS_MANAGER.list(assetOwnerKey());
         if (assets.isEmpty()) {
             return new ToolExecutionResult(true, "No assets tracked yet.");
         }
@@ -2982,7 +3077,7 @@ public class MineClawd {
         return new ToolExecutionResult(true, out.toString().trim());
     }
 
-    private ToolExecutionResult upsertAssetRecordTool(String ownerKey, JsonObject args) {
+    private ToolExecutionResult upsertAssetRecordTool(String ignoredOwnerKey, JsonObject args) {
         String scriptPath = readOptionalStringArg(args, "script_path");
         if (scriptPath.isBlank()) {
             scriptPath = readOptionalStringArg(args, "scriptPath");
@@ -3005,7 +3100,7 @@ public class MineClawd {
                 readOptionalDoubleArg(args, "entity_z"),
                 readOptionalStringArg(args, "session_id")
         );
-        UpsertResult result = ASSETS_MANAGER.upsert(ownerKey, draft);
+        UpsertResult result = ASSETS_MANAGER.upsert(assetOwnerKey(), draft);
         if (!result.success()) {
             return new ToolExecutionResult(false, result.message());
         }
@@ -3035,7 +3130,7 @@ public class MineClawd {
         return new ToolExecutionResult(true, out.toString());
     }
 
-    private ToolExecutionResult removeAssetRecordTool(String ownerKey, JsonObject args) {
+    private ToolExecutionResult removeAssetRecordTool(String ignoredOwnerKey, JsonObject args) {
         String id = readOptionalStringArg(args, "id");
         if (id.isBlank()) {
             id = readOptionalStringArg(args, "reference");
@@ -3043,6 +3138,7 @@ public class MineClawd {
         if (id.isBlank()) {
             return new ToolExecutionResult(false, "Tool call is missing required string `id`.");
         }
+        String ownerKey = assetOwnerKey();
         AssetRecord record = ASSETS_MANAGER.resolve(ownerKey, id);
         if (record == null) {
             return new ToolExecutionResult(false, "Asset record was not found.");
@@ -3151,7 +3247,7 @@ public class MineClawd {
                     completePendingQuestion(current, "SKIPPED: User did not respond within 60 seconds.");
                     if (!questionUiAvailable) {
                         player.sendMessage(Text.empty().append(agentPrefix())
-                                .append(renderAgentBody("Question timed out. Continuing with skip result.")), false);
+                                .append(renderAgentBody(null, "Question timed out. Continuing with skip result.")), false);
                     }
                 }
             });
@@ -3163,7 +3259,7 @@ public class MineClawd {
 
     private void sendPendingQuestionFallback(ServerCommandSource source, ServerPlayerEntity player, PendingQuestion pending) {
         player.sendMessage(Text.empty().append(agentPrefix())
-                .append(renderAgentBody("I need your input. Choose below (`60s` timeout).")), false);
+                .append(renderAgentBody(null, "I need your input. Choose below (`60s` timeout).")), false);
         player.sendMessage(Text.empty().append(agentPrefix()).append(Text.literal(pending.question())), false);
         for (int i = 0; i < pending.options().size(); i++) {
             int index = i + 1;
@@ -3236,7 +3332,7 @@ public class MineClawd {
                 if (index < 0 || index >= pending.options().size()) {
                     if (notifyInChat) {
                         player.sendMessage(Text.empty().append(agentPrefix())
-                                .append(renderAgentBody("Invalid option index from client UI. Please retry.")), false);
+                                .append(renderAgentBody(null, "Invalid option index from client UI. Please retry.")), false);
                     }
                     return;
                 }
@@ -3244,7 +3340,7 @@ public class MineClawd {
                 completePendingQuestion(pending, "User selected option " + (index + 1) + ": " + selected);
                 if (notifyInChat) {
                     player.sendMessage(Text.empty().append(agentPrefix())
-                            .append(renderAgentBody("Selection received: `" + selected + "`.")), false);
+                            .append(renderAgentBody(null, "Selection received: `" + selected + "`.")), false);
                 }
             }
             case OTHER -> {
@@ -3253,14 +3349,14 @@ public class MineClawd {
                     completePendingQuestion(pending, "SKIPPED: User submitted empty custom response.");
                     if (notifyInChat) {
                         player.sendMessage(Text.empty().append(agentPrefix())
-                                .append(renderAgentBody("Custom response was empty, treated as skip.")), false);
+                                .append(renderAgentBody(null, "Custom response was empty, treated as skip.")), false);
                     }
                     return;
                 }
                 completePendingQuestion(pending, "User provided custom response: " + custom);
                 if (notifyInChat) {
                     player.sendMessage(Text.empty().append(agentPrefix())
-                            .append(renderAgentBody("Custom response received.")), false);
+                            .append(renderAgentBody(null, "Custom response received.")), false);
                 }
             }
             case SKIP -> {
@@ -3271,7 +3367,7 @@ public class MineClawd {
                 completePendingQuestion(pending, "SKIPPED: " + reason);
                 if (notifyInChat) {
                     player.sendMessage(Text.empty().append(agentPrefix())
-                            .append(renderAgentBody("Skipped.")), false);
+                            .append(renderAgentBody(null, "Skipped.")), false);
                 }
             }
         }
@@ -3288,12 +3384,12 @@ public class MineClawd {
         String text = message == null ? "" : message.getString();
         if (text == null || text.isBlank()) {
             sender.sendMessage(Text.empty().append(agentPrefix())
-                    .append(renderAgentBody("Custom response cannot be empty. Type again or `/mineclawd choose cancel`.")), false);
+                    .append(renderAgentBody(null, "Custom response cannot be empty. Type again or `/mineclawd choose cancel`.")), false);
             return false;
         }
         completePendingQuestion(pending, "User provided custom response: " + text.trim());
         sender.sendMessage(Text.empty().append(agentPrefix())
-                .append(renderAgentBody("Custom response received.")), false);
+                .append(renderAgentBody(null, "Custom response received.")), false);
         return false;
     }
 
@@ -3317,6 +3413,21 @@ public class MineClawd {
                         TOOL_EXECUTE_COMMAND,
                         "Execute a Minecraft command and return command output/result.",
                         commandToolParameters()
+                ),
+                new OpenAITool(
+                        TOOL_LIST_COMMANDS,
+                        "List available root commands. Optionally filter with mod_id (best-effort by command name/prefix).",
+                        listCommandsToolParameters()
+                ),
+                new OpenAITool(
+                        TOOL_FETCH_MODRINTH,
+                        "Fetch the Modrinth project page content for an installed mod id.",
+                        fetchModrinthToolParameters()
+                ),
+                new OpenAITool(
+                        TOOL_FETCH_URL,
+                        "Fetch any HTTP(S) URL and return readable content. HTML is converted to Markdown.",
+                        fetchUrlToolParameters()
                 ),
                 new OpenAITool(
                         TOOL_LIST_SERVER_SCRIPTS,
@@ -3350,7 +3461,7 @@ public class MineClawd {
                 ),
                 new OpenAITool(
                         TOOL_LIST_ASSETS,
-                        "List currently tracked persistent asset records for this player/session owner.",
+                        "List currently tracked persistent asset records (server-global across players).",
                         noArgToolParameters()
                 ),
                 new OpenAITool(
@@ -3370,6 +3481,11 @@ public class MineClawd {
                             TOOL_LIST_DYNAMIC_CONTENT,
                             "List currently active dynamic placeholder entries and free slots.",
                             noArgToolParameters()
+                    ),
+                    new OpenAITool(
+                            TOOL_LIST_DYNAMIC_PROPERTIES,
+                            "List editable property keys/ranges for dynamic items, blocks, and fluids.",
+                            dynamicPropertyListToolParameters()
                     ),
                     new OpenAITool(
                             TOOL_REGISTER_DYNAMIC_ITEM,
@@ -3429,6 +3545,21 @@ public class MineClawd {
                         commandToolParameters()
                 ),
                 new VertexAIFunction(
+                        TOOL_LIST_COMMANDS,
+                        "List available root commands. Optionally filter with mod_id (best-effort by command name/prefix).",
+                        listCommandsToolParameters()
+                ),
+                new VertexAIFunction(
+                        TOOL_FETCH_MODRINTH,
+                        "Fetch the Modrinth project page content for an installed mod id.",
+                        fetchModrinthToolParameters()
+                ),
+                new VertexAIFunction(
+                        TOOL_FETCH_URL,
+                        "Fetch any HTTP(S) URL and return readable content. HTML is converted to Markdown.",
+                        fetchUrlToolParameters()
+                ),
+                new VertexAIFunction(
                         TOOL_LIST_SERVER_SCRIPTS,
                         "List files inside kubejs/server_scripts/mineclawd/.",
                         noArgToolParameters()
@@ -3460,7 +3591,7 @@ public class MineClawd {
                 ),
                 new VertexAIFunction(
                         TOOL_LIST_ASSETS,
-                        "List currently tracked persistent asset records for this player/session owner.",
+                        "List currently tracked persistent asset records (server-global across players).",
                         noArgToolParameters()
                 ),
                 new VertexAIFunction(
@@ -3480,6 +3611,11 @@ public class MineClawd {
                             TOOL_LIST_DYNAMIC_CONTENT,
                             "List currently active dynamic placeholder entries and free slots.",
                             noArgToolParameters()
+                    ),
+                    new VertexAIFunction(
+                            TOOL_LIST_DYNAMIC_PROPERTIES,
+                            "List editable property keys/ranges for dynamic items, blocks, and fluids.",
+                            dynamicPropertyListToolParameters()
                     ),
                     new VertexAIFunction(
                             TOOL_REGISTER_DYNAMIC_ITEM,
@@ -3555,6 +3691,37 @@ public class MineClawd {
         return objectToolParameters(properties, "command");
     }
 
+    private JsonObject listCommandsToolParameters() {
+        JsonObject properties = new JsonObject();
+        JsonObject modId = new JsonObject();
+        modId.addProperty("type", "string");
+        modId.addProperty("description", "Optional installed mod id filter, for example `kubejs`.");
+        properties.add("mod_id", modId);
+        return objectToolParameters(properties);
+    }
+
+    private JsonObject fetchModrinthToolParameters() {
+        JsonObject properties = new JsonObject();
+
+        JsonObject modId = new JsonObject();
+        modId.addProperty("type", "string");
+        modId.addProperty("description", "Installed mod id to resolve a Modrinth page for, for example `kubejs`.");
+        properties.add("mod_id", modId);
+
+        return objectToolParameters(properties, "mod_id");
+    }
+
+    private JsonObject fetchUrlToolParameters() {
+        JsonObject properties = new JsonObject();
+
+        JsonObject url = new JsonObject();
+        url.addProperty("type", "string");
+        url.addProperty("description", "HTTP(S) URL to fetch. HTML will be converted to Markdown.");
+        properties.add("url", url);
+
+        return objectToolParameters(properties, "url");
+    }
+
     private JsonObject questionToolParameters() {
         JsonObject properties = new JsonObject();
 
@@ -3592,6 +3759,26 @@ public class MineClawd {
         return objectToolParameters(properties, "path", "content");
     }
 
+    private JsonObject dynamicPropertyListToolParameters() {
+        JsonObject properties = new JsonObject();
+
+        JsonObject type = new JsonObject();
+        type.addProperty("type", "string");
+        JsonArray values = new JsonArray();
+        values.add("all");
+        values.add("item");
+        values.add("items");
+        values.add("block");
+        values.add("blocks");
+        values.add("fluid");
+        values.add("fluids");
+        type.add("enum", values);
+        type.addProperty("description", "Optional property group filter. Omit for all.");
+        properties.add("type", type);
+
+        return objectToolParameters(properties);
+    }
+
     private JsonObject dynamicItemToolParameters() {
         JsonObject properties = new JsonObject();
 
@@ -3609,13 +3796,71 @@ public class MineClawd {
 
         JsonObject material = new JsonObject();
         material.addProperty("type", "string");
-        material.addProperty("description", "Vanilla material item id, e.g. minecraft:diamond. Choose one related to the requested feature.");
+        material.addProperty("description", "Vanilla material item id, e.g. minecraft:diamond.");
         properties.add("material_item", material);
 
         JsonObject throwable = new JsonObject();
         throwable.addProperty("type", "boolean");
-        throwable.addProperty("description", "Whether this item should behave as a throwable projectile.");
+        throwable.addProperty("description", "Whether this item behaves like a throwable projectile.");
         properties.add("throwable", throwable);
+
+        JsonObject throwSpeed = new JsonObject();
+        throwSpeed.addProperty("type", "number");
+        throwSpeed.addProperty("description", "Projectile speed (0.1..4.0).");
+        properties.add("throw_speed", throwSpeed);
+
+        JsonObject throwInaccuracy = new JsonObject();
+        throwInaccuracy.addProperty("type", "number");
+        throwInaccuracy.addProperty("description", "Projectile inaccuracy/divergence (0.0..5.0).");
+        properties.add("throw_inaccuracy", throwInaccuracy);
+
+        JsonObject throwCooldownTicks = new JsonObject();
+        throwCooldownTicks.addProperty("type", "integer");
+        throwCooldownTicks.addProperty("description", "Optional cooldown after throw (0..1200 ticks).");
+        properties.add("throw_cooldown_ticks", throwCooldownTicks);
+
+        JsonObject consumeOnThrow = new JsonObject();
+        consumeOnThrow.addProperty("type", "boolean");
+        consumeOnThrow.addProperty("description", "Whether to consume one item per throw (default true).");
+        properties.add("consume_on_throw", consumeOnThrow);
+
+        JsonObject maxCount = new JsonObject();
+        maxCount.addProperty("type", "integer");
+        maxCount.addProperty("description", "Stack size override (0..99). 0 means follow material item.");
+        properties.add("max_count", maxCount);
+
+        JsonObject useAction = new JsonObject();
+        useAction.addProperty("type", "string");
+        JsonArray useActionEnum = new JsonArray();
+        useActionEnum.add("material");
+        useActionEnum.add("none");
+        useActionEnum.add("eat");
+        useActionEnum.add("drink");
+        useActionEnum.add("bow");
+        useActionEnum.add("spear");
+        useActionEnum.add("crossbow");
+        useActionEnum.add("spyglass");
+        useActionEnum.add("toot_horn");
+        useActionEnum.add("brush");
+        useActionEnum.add("block");
+        useAction.add("enum", useActionEnum);
+        useAction.addProperty("description", "Item use animation override.");
+        properties.add("use_action", useAction);
+
+        JsonObject useTimeTicks = new JsonObject();
+        useTimeTicks.addProperty("type", "integer");
+        useTimeTicks.addProperty("description", "Use-time override (0..72000 ticks). 0 means follow material item.");
+        properties.add("use_time_ticks", useTimeTicks);
+
+        JsonObject glintMode = new JsonObject();
+        glintMode.addProperty("type", "string");
+        JsonArray glintEnum = new JsonArray();
+        glintEnum.add("material");
+        glintEnum.add("true");
+        glintEnum.add("false");
+        glintMode.add("enum", glintEnum);
+        glintMode.addProperty("description", "Enchantment glint mode.");
+        properties.add("glint_mode", glintMode);
 
         return objectToolParameters(properties, "name");
     }
@@ -3637,13 +3882,33 @@ public class MineClawd {
 
         JsonObject material = new JsonObject();
         material.addProperty("type", "string");
-        material.addProperty("description", "Vanilla material block id, e.g. minecraft:stone. Choose one related to the requested feature.");
+        material.addProperty("description", "Vanilla material block id, e.g. minecraft:stone.");
         properties.add("material_block", material);
 
         JsonObject friction = new JsonObject();
         friction.addProperty("type", "number");
-        friction.addProperty("description", "Optional block friction/slipperiness (0.0 to 2.0).");
+        friction.addProperty("description", "Block friction/slipperiness (0.0..2.0).");
         properties.add("friction", friction);
+
+        JsonObject velocityMultiplier = new JsonObject();
+        velocityMultiplier.addProperty("type", "number");
+        velocityMultiplier.addProperty("description", "Entity velocity multiplier on this block (0.0..10.0).");
+        properties.add("velocity_multiplier", velocityMultiplier);
+
+        JsonObject jumpVelocityMultiplier = new JsonObject();
+        jumpVelocityMultiplier.addProperty("type", "number");
+        jumpVelocityMultiplier.addProperty("description", "Entity jump multiplier on this block (0.0..10.0).");
+        properties.add("jump_velocity_multiplier", jumpVelocityMultiplier);
+
+        JsonObject blastResistance = new JsonObject();
+        blastResistance.addProperty("type", "number");
+        blastResistance.addProperty("description", "Blast resistance override (0.0..1200.0).");
+        properties.add("blast_resistance", blastResistance);
+
+        JsonObject useMaterialSounds = new JsonObject();
+        useMaterialSounds.addProperty("type", "boolean");
+        useMaterialSounds.addProperty("description", "If true, use sound group from material block.");
+        properties.add("use_material_sounds", useMaterialSounds);
 
         return objectToolParameters(properties, "name");
     }
@@ -3665,19 +3930,44 @@ public class MineClawd {
 
         JsonObject material = new JsonObject();
         material.addProperty("type", "string");
-        material.addProperty("description", "Vanilla material fluid id, e.g. minecraft:water. Choose one related to the requested feature.");
+        material.addProperty("description", "Vanilla material fluid id, e.g. minecraft:water.");
         properties.add("material_fluid", material);
 
         JsonObject color = new JsonObject();
         color.addProperty("type", "string");
-        color.addProperty("description", "Optional custom pure color in #RRGGBB format. Use 'default' to clear.");
+        color.addProperty("description", "Custom fluid tint color in #RRGGBB or `default`.");
         properties.add("color", color);
+
+        JsonObject tickRate = new JsonObject();
+        tickRate.addProperty("type", "integer");
+        tickRate.addProperty("description", "Fluid tick rate (1..200).");
+        properties.add("tick_rate", tickRate);
+
+        JsonObject flowSpeed = new JsonObject();
+        flowSpeed.addProperty("type", "integer");
+        flowSpeed.addProperty("description", "Fluid flow speed / max flow distance (1..16).");
+        properties.add("flow_speed", flowSpeed);
+
+        JsonObject levelDecrease = new JsonObject();
+        levelDecrease.addProperty("type", "integer");
+        levelDecrease.addProperty("description", "Fluid level decrease per block (1..8).");
+        properties.add("level_decrease_per_block", levelDecrease);
+
+        JsonObject blastResistance = new JsonObject();
+        blastResistance.addProperty("type", "number");
+        blastResistance.addProperty("description", "Fluid blast resistance (0.0..1200.0).");
+        properties.add("blast_resistance", blastResistance);
+
+        JsonObject infinite = new JsonObject();
+        infinite.addProperty("type", "boolean");
+        infinite.addProperty("description", "Whether this fluid is infinite.");
+        properties.add("infinite", infinite);
 
         return objectToolParameters(properties, "name");
     }
 
     private JsonObject dynamicItemUpdateToolParameters() {
-        JsonObject properties = new JsonObject();
+        JsonObject properties = dynamicItemToolParameters().get("properties").getAsJsonObject();
 
         JsonObject slot = new JsonObject();
         slot.addProperty("type", "integer");
@@ -3685,27 +3975,12 @@ public class MineClawd {
         slot.addProperty("minimum", 1);
         slot.addProperty("maximum", 30);
         properties.add("slot", slot);
-
-        JsonObject name = new JsonObject();
-        name.addProperty("type", "string");
-        name.addProperty("description", "Optional updated display name.");
-        properties.add("name", name);
-
-        JsonObject material = new JsonObject();
-        material.addProperty("type", "string");
-        material.addProperty("description", "Optional updated vanilla material item id; keep it related to requested behavior.");
-        properties.add("material_item", material);
-
-        JsonObject throwable = new JsonObject();
-        throwable.addProperty("type", "boolean");
-        throwable.addProperty("description", "Optional updated throwable behavior.");
-        properties.add("throwable", throwable);
 
         return objectToolParameters(properties, "slot");
     }
 
     private JsonObject dynamicBlockUpdateToolParameters() {
-        JsonObject properties = new JsonObject();
+        JsonObject properties = dynamicBlockToolParameters().get("properties").getAsJsonObject();
 
         JsonObject slot = new JsonObject();
         slot.addProperty("type", "integer");
@@ -3713,27 +3988,12 @@ public class MineClawd {
         slot.addProperty("minimum", 1);
         slot.addProperty("maximum", 30);
         properties.add("slot", slot);
-
-        JsonObject name = new JsonObject();
-        name.addProperty("type", "string");
-        name.addProperty("description", "Optional updated display name.");
-        properties.add("name", name);
-
-        JsonObject material = new JsonObject();
-        material.addProperty("type", "string");
-        material.addProperty("description", "Optional updated vanilla material block id; keep it related to requested behavior.");
-        properties.add("material_block", material);
-
-        JsonObject friction = new JsonObject();
-        friction.addProperty("type", "number");
-        friction.addProperty("description", "Optional updated block friction/slipperiness (0.0 to 2.0).");
-        properties.add("friction", friction);
 
         return objectToolParameters(properties, "slot");
     }
 
     private JsonObject dynamicFluidUpdateToolParameters() {
-        JsonObject properties = new JsonObject();
+        JsonObject properties = dynamicFluidToolParameters().get("properties").getAsJsonObject();
 
         JsonObject slot = new JsonObject();
         slot.addProperty("type", "integer");
@@ -3741,21 +4001,6 @@ public class MineClawd {
         slot.addProperty("minimum", 1);
         slot.addProperty("maximum", 30);
         properties.add("slot", slot);
-
-        JsonObject name = new JsonObject();
-        name.addProperty("type", "string");
-        name.addProperty("description", "Optional updated display name.");
-        properties.add("name", name);
-
-        JsonObject material = new JsonObject();
-        material.addProperty("type", "string");
-        material.addProperty("description", "Optional updated vanilla material fluid id; keep it related to requested behavior.");
-        properties.add("material_fluid", material);
-
-        JsonObject color = new JsonObject();
-        color.addProperty("type", "string");
-        color.addProperty("description", "Optional updated pure color (#RRGGBB) or `default`.");
-        properties.add("color", color);
 
         return objectToolParameters(properties, "slot");
     }
@@ -4041,6 +4286,10 @@ public class MineClawd {
         return source.getName();
     }
 
+    private String assetOwnerKey() {
+        return GLOBAL_ASSET_OWNER_KEY;
+    }
+
     private String buildSystemPrompt(
             MineClawdConfig config,
             String ownerKey,
@@ -4053,9 +4302,13 @@ public class MineClawd {
                 : configured.trim();
         Persona persona = PERSONA_MANAGER.loadActivePersona(ownerKey);
         String env = buildEnvironmentInfo();
+        String installedMods = buildInstalledModsInfo();
         StringBuilder prompt = new StringBuilder(basePrompt);
         if (!env.isBlank()) {
             prompt.append("\n\nEnvironment:\n").append(env);
+        }
+        if (!installedMods.isBlank()) {
+            prompt.append("\n\nInstalled Mods:\n").append(installedMods);
         }
         prompt.append("\n\nPersona context:\n")
                 .append("Project and tool identity remains MineClawd even if the persona uses a different name.\n")
@@ -4110,6 +4363,56 @@ public class MineClawd {
         return sb.toString().trim();
     }
 
+    private String buildInstalledModsInfo() {
+        Collection<dev.architectury.platform.Mod> mods = Platform.getMods();
+        if (mods == null || mods.isEmpty()) {
+            return "";
+        }
+        Map<String, dev.architectury.platform.Mod> byId = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (dev.architectury.platform.Mod mod : mods) {
+            if (mod == null || mod.getModId() == null || mod.getModId().isBlank()) {
+                continue;
+            }
+            byId.putIfAbsent(mod.getModId(), mod);
+        }
+        if (byId.isEmpty()) {
+            return "";
+        }
+
+        final int maxLines = 220;
+        final int maxChars = 14_000;
+        StringBuilder out = new StringBuilder();
+        out.append("Loaded mods (").append(byId.size()).append("):\n");
+        int count = 0;
+        for (dev.architectury.platform.Mod mod : byId.values()) {
+            if (mod == null) {
+                continue;
+            }
+            count++;
+            if (count > maxLines) {
+                out.append("- ... truncated; total loaded mods: ").append(byId.size()).append("\n");
+                break;
+            }
+            String id = mod.getModId() == null ? "" : mod.getModId().trim();
+            String version = mod.getVersion() == null ? "" : mod.getVersion().trim();
+            String name = mod.getName() == null ? "" : mod.getName().trim();
+
+            out.append("- ").append(id);
+            if (!version.isBlank()) {
+                out.append(" v").append(version);
+            }
+            if (!name.isBlank() && !name.equalsIgnoreCase(id)) {
+                out.append(" (").append(name).append(")");
+            }
+            out.append("\n");
+            if (out.length() >= maxChars) {
+                out.append("- ... truncated due to prompt size.\n");
+                break;
+            }
+        }
+        return out.toString().trim();
+    }
+
     private String modVersion(String id) {
         return Platform.getOptionalMod(id)
                 .map(dev.architectury.platform.Mod::getVersion)
@@ -4138,7 +4441,7 @@ public class MineClawd {
         if (source == null || markdown == null || markdown.isBlank()) {
             return;
         }
-        sendAgentLine(source, renderAgentBody(markdown));
+        sendAgentLine(source, renderAgentBody(source, markdown));
     }
 
     private void sendAgentLine(ServerCommandSource source, Text body) {
@@ -4157,7 +4460,7 @@ public class MineClawd {
         return Text.literal("[MineClawd] ").formatted(Formatting.LIGHT_PURPLE, Formatting.BOLD);
     }
 
-    private Text renderAgentBody(String markdown) {
+    private Text renderAgentBody(ServerCommandSource source, String markdown) {
         String normalized = normalizeMineDownActions(markdown);
         String input = normalized == null ? "" : normalized.trim();
         if (input.isBlank()) {
@@ -4183,11 +4486,356 @@ public class MineClawd {
         return MINEDOWN_ACTION_COLON_PATTERN.matcher(markdown).replaceAll("($1=");
     }
 
+    private ToolStatusDescriptor announceToolCallProgress(
+            ServerCommandSource source,
+            AgentRuntime runtime,
+            String toolName,
+            JsonObject args
+    ) {
+        if (source == null || runtime == null || isRuntimeInactive(runtime)) {
+            return null;
+        }
+        ToolStatusDescriptor descriptor = buildToolStatusDescriptor(toolName, args);
+        if (descriptor == null || descriptor.shortText() == null || descriptor.shortText().isBlank()) {
+            return null;
+        }
+        if (runtime.clientStreamEnabled()) {
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.TOOL_STATUS, buildToolStatusPayload(descriptor));
+            return descriptor;
+        }
+        sendToolStatusChatLine(source, descriptor);
+        return descriptor;
+    }
+
+    private void clearToolCallProgress(ServerCommandSource source, AgentRuntime runtime) {
+        clearToolCallProgress(source, runtime, null);
+    }
+
+    private void clearToolCallProgress(
+            ServerCommandSource source,
+            AgentRuntime runtime,
+            ToolStatusDescriptor completionDescriptor
+    ) {
+        if (source == null || runtime == null || isRuntimeInactive(runtime)) {
+            return;
+        }
+        if (runtime.clientStreamEnabled()) {
+            String payload = completionDescriptor == null ? "" : buildToolStatusPayload(completionDescriptor);
+            sendAgentStreamEvent(source, runtime, AgentStreamEventType.TOOL_STATUS_CLEAR, payload);
+            return;
+        }
+        if (completionDescriptor != null && completionDescriptor.shortText() != null && !completionDescriptor.shortText().isBlank()) {
+            sendToolStatusChatLine(source, completionDescriptor);
+        }
+    }
+
+    private String buildToolStatusPayload(ToolStatusDescriptor descriptor) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("short", descriptor == null ? "" : safeForLog(descriptor.shortText()));
+        payload.addProperty("hover", descriptor == null ? "" : trimForTrace(descriptor.hoverText()));
+        return payload.toString();
+    }
+
+    private void sendToolStatusChatLine(ServerCommandSource source, ToolStatusDescriptor descriptor) {
+        if (source == null || descriptor == null || descriptor.shortText() == null || descriptor.shortText().isBlank()) {
+            return;
+        }
+        String shortText = descriptor.shortText().trim();
+        if (shortText.length() > TOOL_STATUS_CHAT_MAX_CHARS) {
+            shortText = shortText.substring(0, TOOL_STATUS_CHAT_MAX_CHARS).trim() + "...";
+        }
+        MutableText line = Text.literal(shortText).formatted(Formatting.GRAY);
+        String hover = descriptor.hoverText();
+        if (hover != null && !hover.isBlank()) {
+            line.setStyle(line.getStyle().withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal(trimForTrace(hover)))));
+        }
+
+        if (source.getEntity() instanceof ServerPlayerEntity player) {
+            player.sendMessage(line, false);
+            return;
+        }
+        source.sendFeedback(() -> line, false);
+    }
+
+    private ToolStatusDescriptor buildToolStatusDescriptor(String toolName, JsonObject args) {
+        String normalizedName = toolName == null ? "" : toolName.trim();
+        String shortText;
+        String hoverText = "";
+
+        switch (normalizedName) {
+            case TOOL_FETCH_URL -> {
+                String rawUrl = readOptionalStringArg(args, "url");
+                String host = extractUrlHost(rawUrl);
+                shortText = host.isBlank() ? "Fetching URL" : "Fetching " + host;
+                hoverText = rawUrl.isBlank() ? "Fetching URL content." : "URL: " + rawUrl.trim();
+            }
+            case TOOL_FETCH_MODRINTH -> {
+                String modId = readOptionalStringArg(args, "mod_id");
+                shortText = modId.isBlank() ? "Fetching Modrinth page" : "Fetching Modrinth page for " + modId;
+                hoverText = modId.isBlank() ? "Fetching Modrinth project page." : "Modrinth mod_id: " + modId;
+            }
+            case TOOL_EXECUTE_COMMAND -> {
+                String command = readOptionalStringArg(args, "command");
+                shortText = "Executing command " + summarizeCommandForStatus(command);
+                hoverText = command.isBlank() ? "" : "Command: " + normalizeCommandForHover(command);
+            }
+            case TOOL_APPLY_INSTANT_SERVER_SCRIPT, LEGACY_TOOL_KUBEJS_EVAL -> {
+                shortText = "Applying instant script";
+                hoverText = "Executing KubeJS instant script (code hidden).";
+            }
+            case TOOL_LIST_COMMANDS -> {
+                String modId = readOptionalStringArg(args, "mod_id");
+                shortText = modId.isBlank() ? "Listing commands" : "Listing commands for " + modId;
+                hoverText = modId.isBlank() ? "Listing server root commands." : "List commands using mod_id filter: " + modId;
+            }
+            case TOOL_LIST_SERVER_SCRIPTS -> {
+                shortText = "Listing server scripts";
+                hoverText = "Listing files under kubejs/server_scripts/mineclawd/.";
+            }
+            case TOOL_READ_SERVER_SCRIPT -> {
+                String path = readOptionalStringArg(args, "path");
+                shortText = path.isBlank() ? "Reading server script" : "Reading script " + summarizePathTail(path);
+                hoverText = path.isBlank() ? "" : "Path: " + path;
+            }
+            case TOOL_WRITE_SERVER_SCRIPT -> {
+                String path = readOptionalStringArg(args, "path");
+                shortText = path.isBlank() ? "Writing server script" : "Writing script " + summarizePathTail(path);
+                hoverText = path.isBlank() ? "Writing a server script file." : "Path: " + path;
+            }
+            case TOOL_DELETE_SERVER_SCRIPT -> {
+                String path = readOptionalStringArg(args, "path");
+                shortText = path.isBlank() ? "Deleting server script" : "Deleting script " + summarizePathTail(path);
+                hoverText = path.isBlank() ? "Deleting a server script file." : "Path: " + path;
+            }
+            case TOOL_RELOAD_GAME -> {
+                shortText = "Reloading game scripts";
+                hoverText = "Running /reload and checking KubeJS loading errors.";
+            }
+            case TOOL_SYNC_COMMAND_TREE -> {
+                shortText = "Syncing command tree";
+                hoverText = "Refreshing command suggestions for online players.";
+            }
+            case TOOL_ASK_USER -> {
+                shortText = "Asking a clarification question";
+                hoverText = readOptionalStringArg(args, "question");
+            }
+            case TOOL_LIST_DYNAMIC_CONTENT -> {
+                shortText = "Inspecting dynamic content slots";
+            }
+            case TOOL_LIST_DYNAMIC_PROPERTIES -> {
+                shortText = "Inspecting dynamic properties";
+            }
+            case TOOL_REGISTER_DYNAMIC_ITEM, TOOL_REGISTER_DYNAMIC_BLOCK, TOOL_REGISTER_DYNAMIC_FLUID -> {
+                shortText = "Registering dynamic content";
+            }
+            case TOOL_UPDATE_DYNAMIC_ITEM, TOOL_UPDATE_DYNAMIC_BLOCK, TOOL_UPDATE_DYNAMIC_FLUID -> {
+                shortText = "Updating dynamic content";
+            }
+            case TOOL_UNREGISTER_DYNAMIC_CONTENT -> {
+                shortText = "Unregistering dynamic content";
+            }
+            case TOOL_LIST_ASSETS -> {
+                shortText = "Listing tracked assets";
+            }
+            case TOOL_UPSERT_ASSET_RECORD -> {
+                shortText = "Updating tracked asset";
+            }
+            case TOOL_REMOVE_ASSET_RECORD -> {
+                shortText = "Removing tracked asset";
+            }
+            default -> {
+                shortText = "Running task step";
+                hoverText = normalizedName.isBlank() ? "" : "Tool: " + normalizedName;
+            }
+        }
+
+        return new ToolStatusDescriptor(safeForLog(shortText), safeForLog(hoverText));
+    }
+
+    private ToolStatusDescriptor buildToolStatusCompletedDescriptor(String toolName, JsonObject args) {
+        String normalizedName = toolName == null ? "" : toolName.trim();
+        String shortText;
+        String hoverText = "";
+
+        switch (normalizedName) {
+            case TOOL_FETCH_URL -> {
+                String rawUrl = readOptionalStringArg(args, "url");
+                String host = extractUrlHost(rawUrl);
+                shortText = host.isBlank() ? "Fetched URL" : "Fetched " + host;
+                hoverText = rawUrl.isBlank() ? "Fetched URL content." : "URL: " + rawUrl.trim();
+            }
+            case TOOL_FETCH_MODRINTH -> {
+                String modId = readOptionalStringArg(args, "mod_id");
+                shortText = modId.isBlank() ? "Fetched Modrinth page" : "Fetched Modrinth page for " + modId;
+                hoverText = modId.isBlank() ? "Fetched Modrinth project page." : "Modrinth mod_id: " + modId;
+            }
+            case TOOL_EXECUTE_COMMAND -> {
+                String command = readOptionalStringArg(args, "command");
+                shortText = "Executed command " + summarizeCommandForStatus(command);
+                hoverText = command.isBlank() ? "" : "Command: " + normalizeCommandForHover(command);
+            }
+            case TOOL_APPLY_INSTANT_SERVER_SCRIPT, LEGACY_TOOL_KUBEJS_EVAL -> {
+                shortText = "Applied instant script";
+                hoverText = "Executed KubeJS instant script (code hidden).";
+            }
+            case TOOL_LIST_COMMANDS -> {
+                String modId = readOptionalStringArg(args, "mod_id");
+                shortText = modId.isBlank() ? "Listed commands" : "Listed commands for " + modId;
+                hoverText = modId.isBlank() ? "Listed server root commands." : "List commands using mod_id filter: " + modId;
+            }
+            case TOOL_LIST_SERVER_SCRIPTS -> {
+                shortText = "Listed server scripts";
+                hoverText = "Listed files under kubejs/server_scripts/mineclawd/.";
+            }
+            case TOOL_READ_SERVER_SCRIPT -> {
+                String path = readOptionalStringArg(args, "path");
+                shortText = path.isBlank() ? "Read server script" : "Read script " + summarizePathTail(path);
+                hoverText = path.isBlank() ? "" : "Path: " + path;
+            }
+            case TOOL_WRITE_SERVER_SCRIPT -> {
+                String path = readOptionalStringArg(args, "path");
+                shortText = path.isBlank() ? "Wrote server script" : "Wrote script " + summarizePathTail(path);
+                hoverText = path.isBlank() ? "Wrote a server script file." : "Path: " + path;
+            }
+            case TOOL_DELETE_SERVER_SCRIPT -> {
+                String path = readOptionalStringArg(args, "path");
+                shortText = path.isBlank() ? "Deleted server script" : "Deleted script " + summarizePathTail(path);
+                hoverText = path.isBlank() ? "Deleted a server script file." : "Path: " + path;
+            }
+            case TOOL_RELOAD_GAME -> {
+                shortText = "Reloaded game scripts";
+                hoverText = "Ran /reload and checked KubeJS loading errors.";
+            }
+            case TOOL_SYNC_COMMAND_TREE -> {
+                shortText = "Synced command tree";
+                hoverText = "Refreshed command suggestions for online players.";
+            }
+            case TOOL_ASK_USER -> {
+                shortText = "Asked a clarification question";
+                hoverText = readOptionalStringArg(args, "question");
+            }
+            case TOOL_LIST_DYNAMIC_CONTENT -> {
+                shortText = "Inspected dynamic content slots";
+            }
+            case TOOL_LIST_DYNAMIC_PROPERTIES -> {
+                shortText = "Inspected dynamic properties";
+            }
+            case TOOL_REGISTER_DYNAMIC_ITEM, TOOL_REGISTER_DYNAMIC_BLOCK, TOOL_REGISTER_DYNAMIC_FLUID -> {
+                shortText = "Registered dynamic content";
+            }
+            case TOOL_UPDATE_DYNAMIC_ITEM, TOOL_UPDATE_DYNAMIC_BLOCK, TOOL_UPDATE_DYNAMIC_FLUID -> {
+                shortText = "Updated dynamic content";
+            }
+            case TOOL_UNREGISTER_DYNAMIC_CONTENT -> {
+                shortText = "Unregistered dynamic content";
+            }
+            case TOOL_LIST_ASSETS -> {
+                shortText = "Listed tracked assets";
+            }
+            case TOOL_UPSERT_ASSET_RECORD -> {
+                shortText = "Updated tracked asset";
+            }
+            case TOOL_REMOVE_ASSET_RECORD -> {
+                shortText = "Removed tracked asset";
+            }
+            default -> {
+                shortText = "Completed task step";
+                hoverText = normalizedName.isBlank() ? "" : "Tool: " + normalizedName;
+            }
+        }
+
+        return new ToolStatusDescriptor(safeForLog(shortText), safeForLog(hoverText));
+    }
+
+    private String summarizePathTail(String path) {
+        String normalized = path == null ? "" : path.trim().replace('\\', '/');
+        if (normalized.isBlank()) {
+            return "file";
+        }
+        int slash = normalized.lastIndexOf('/');
+        if (slash >= 0 && slash + 1 < normalized.length()) {
+            return normalized.substring(slash + 1);
+        }
+        return normalized;
+    }
+
+    private String summarizeCommandForStatus(String command) {
+        String normalized = command == null ? "" : command.trim();
+        if (normalized.isBlank()) {
+            return "command";
+        }
+        if (!normalized.startsWith("/")) {
+            normalized = "/" + normalized;
+        }
+        int space = normalized.indexOf(' ');
+        if (space > 0) {
+            return normalized.substring(0, space);
+        }
+        return normalized;
+    }
+
+    private String normalizeCommandForHover(String command) {
+        String normalized = command == null ? "" : command.trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        if (!normalized.startsWith("/")) {
+            normalized = "/" + normalized;
+        }
+        return normalized;
+    }
+
+    private String extractUrlHost(String rawUrl) {
+        if (rawUrl == null || rawUrl.isBlank()) {
+            return "";
+        }
+        try {
+            URI uri = URI.create(rawUrl.trim());
+            String host = uri.getHost();
+            if (host == null || host.isBlank()) {
+                return "";
+            }
+            String lower = host.toLowerCase(Locale.ROOT);
+            if (lower.startsWith("www.")) {
+                lower = lower.substring(4);
+            }
+            return lower;
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
     private void debugLog(AgentRuntime runtime, String format, Object... args) {
         if (runtime == null || !runtime.debug()) {
             return;
         }
         LOGGER.info("[MineClawd Debug] [session:{}] {}", runtime.sessionId(), String.format(format, args));
+    }
+
+    private void traceLog(AgentRuntime runtime, String channel, String message) {
+        String sessionId = runtime == null || runtime.sessionId() == null || runtime.sessionId().isBlank()
+                ? "unknown"
+                : runtime.sessionId();
+        String safeChannel = channel == null || channel.isBlank() ? "TRACE" : channel.trim();
+        LOGGER.info("[MineClawd Trace] [session:{}] [{}] {}", sessionId, safeChannel, trimForTrace(message));
+    }
+
+    private String trimForTrace(String text) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = text.replace('\r', ' ').replace('\n', ' ').trim();
+        if (normalized.length() <= TRACE_LOG_MAX_CHARS) {
+            return normalized;
+        }
+        return normalized.substring(0, TRACE_LOG_MAX_CHARS).trim() + " ...[truncated]";
+    }
+
+    private String safeForLog(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.replace('\r', ' ').replace('\n', ' ').trim();
     }
 
     private String summarizeThrowable(Throwable throwable) {
@@ -4853,7 +5501,7 @@ public class MineClawd {
                 ? Text.literal("MineClawd: ").formatted(Formatting.LIGHT_PURPLE, Formatting.BOLD)
                 : Text.literal("You: ").formatted(Formatting.YELLOW, Formatting.BOLD);
         Text body = entry.assistant()
-                ? renderAgentBody(entry.content())
+                ? renderAgentBody(null, entry.content())
                 : Text.literal(entry.content());
         return Text.empty()
                 .append(prefix)
@@ -5057,6 +5705,9 @@ public class MineClawd {
             future.complete(answer == null ? "SKIPPED: Empty answer." : answer);
             return true;
         }
+    }
+
+    private record ToolStatusDescriptor(String shortText, String hoverText) {
     }
 
     private record ToolExecutionBatch(
