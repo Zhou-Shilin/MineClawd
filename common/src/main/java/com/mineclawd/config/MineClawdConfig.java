@@ -120,42 +120,20 @@ public class MineClawdConfig {
                 return merged;
             }
 
-            if (loaded.provider != null) {
-                merged.provider = loaded.provider;
-            }
-            if (loaded.endpoint != null) {
-                merged.endpoint = loaded.endpoint;
-            }
-            if (loaded.apiKey != null) {
-                merged.apiKey = loaded.apiKey;
-            }
-            if (loaded.model != null) {
-                merged.model = loaded.model;
-            }
-            if (loaded.summarizeModel != null) {
-                merged.summarizeModel = loaded.summarizeModel;
-            }
-            if (loaded.vertexEndpoint != null) {
-                merged.vertexEndpoint = loaded.vertexEndpoint;
-            }
-            if (loaded.vertexApiKey != null) {
-                merged.vertexApiKey = loaded.vertexApiKey;
-            }
-            if (loaded.vertexModel != null) {
-                merged.vertexModel = loaded.vertexModel;
-            }
-            if (loaded.vertexSummarizeModel != null) {
-                merged.vertexSummarizeModel = loaded.vertexSummarizeModel;
-            }
+            if (loaded.provider != null) merged.provider = loaded.provider;
+            if (loaded.endpoint != null) merged.endpoint = loaded.endpoint;
+            if (loaded.apiKey != null) merged.apiKey = loaded.apiKey;
+            if (loaded.model != null) merged.model = loaded.model;
+            if (loaded.summarizeModel != null) merged.summarizeModel = loaded.summarizeModel;
+            if (loaded.vertexEndpoint != null) merged.vertexEndpoint = loaded.vertexEndpoint;
+            if (loaded.vertexApiKey != null) merged.vertexApiKey = loaded.vertexApiKey;
+            if (loaded.vertexModel != null) merged.vertexModel = loaded.vertexModel;
+            if (loaded.vertexSummarizeModel != null) merged.vertexSummarizeModel = loaded.vertexSummarizeModel;
             merged.debugMode = loaded.debugMode;
             merged.limitToolCalls = loaded.limitToolCalls;
             merged.toolCallLimit = Math.max(1, Math.min(20, loaded.toolCallLimit));
-            if (loaded.systemPrompt != null) {
-                merged.systemPrompt = loaded.systemPrompt;
-            }
-            if (loaded.dynamicRegistryMode != null) {
-                merged.dynamicRegistryMode = loaded.dynamicRegistryMode;
-            }
+            if (loaded.systemPrompt != null) merged.systemPrompt = loaded.systemPrompt;
+            if (loaded.dynamicRegistryMode != null) merged.dynamicRegistryMode = loaded.dynamicRegistryMode;
             merged.enableGui = loaded.enableGui;
             return merged;
         }
