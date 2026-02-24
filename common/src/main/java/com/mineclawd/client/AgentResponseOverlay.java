@@ -69,6 +69,11 @@ public final class AgentResponseOverlay {
     private static final int INPUT_TEXT_PADDING = 4;
     private static final int INPUT_MAX_CHARS = 600;
     private static final long THINKING_DOTS_FRAME_MS = 350L;
+    private static final long TOOL_STATUS_ANIM_STEP_MS = 95L;
+    private static final long TOOL_STATUS_ANIM_PAUSE_MS = 1000L;
+    private static final long TOOL_STATUS_MIN_VISIBLE_MS = 900L;
+    private static final int TOOL_STATUS_WINDOW_CHARS = 14;
+    private static final int TOOL_STATUS_TOOLTIP_MAX_WIDTH = 260;
     private static final int ORB_ICON_OFFSET_X = 1;
     private static final int ORB_ICON_OFFSET_Y = 1;
     private static final int SESSIONS_NEW_BUTTON_WIDTH = 72;
@@ -87,8 +92,10 @@ public final class AgentResponseOverlay {
     private static final Identifier ORB_ICON_TEXTURE = Identifier.of(MineClawd.MOD_ID, "textures/gui/icon-simplified.png");
     private static final int ORB_ICON_TEXTURE_SIZE = 1024;
     private static final String USER_MARKER = "\u0001usr:";
+    private static final String TOOL_MARKER = "\u0001tool:";
     private static final int USER_PREFIX_COLOR = 0xFF88D6FF;
     private static final int USER_TEXT_COLOR = 0xFFCBEAFF;
+    private static final int TOOL_TEXT_COLOR = 0xFF9CA9B8;
     private static final int AGENT_PREFIX_COLOR = 0xFFE0D68A;
     private static final int AGENT_TEXT_COLOR = 0xFFEFF4FF;
     private static final Pattern MINEDOWN_ACTION_COLON_PATTERN = Pattern.compile(
@@ -130,6 +137,12 @@ public final class AgentResponseOverlay {
 
     private static String activeRequestId = "";
     private static String activeSessionId = "";
+    private static String activeToolStatusText = "";
+    private static String activeToolStatusHover = "";
+    private static long toolStatusAnimStartEpochMs = 0L;
+    private static long toolStatusShownEpochMs = 0L;
+    private static long toolStatusPendingClearEpochMs = 0L;
+    private static boolean autoCreateSessionOnFirstSubmit = true;
     private static boolean awaitingFirstAssistantDelta = false;
     private static final StringBuilder content = new StringBuilder();
     private static final List<OrderedText> wrappedLines = new ArrayList<>();
@@ -155,6 +168,7 @@ public final class AgentResponseOverlay {
     private static final RectBounds assetGiveButton = new RectBounds();
     private static final RectBounds assetModifyButton = new RectBounds();
     private static final RectBounds assetDeleteButton = new RectBounds();
+    private static final RectBounds toolStatusBounds = new RectBounds();
     private static final List<SessionOverlayPayload.SessionItem> sessionItems = new ArrayList<>();
     private static final List<AssetsOverlayPayload.AssetItem> assetItems = new ArrayList<>();
     private static final List<String> personaNames = new ArrayList<>();
@@ -200,6 +214,8 @@ public final class AgentResponseOverlay {
         layoutInitialized = false;
         expandedPanelX = Integer.MIN_VALUE;
         expandedPanelY = Integer.MIN_VALUE;
+        autoCreateSessionOnFirstSubmit = true;
+        clearToolStatusState();
     }
 
     public static void handleStreamEvent(String requestId, AgentStreamEventType type, String payload) {
@@ -214,6 +230,7 @@ public final class AgentResponseOverlay {
             StreamStartPayload startPayload = StreamStartPayload.fromJson(text);
             String startSessionId = startPayload == null ? "" : startPayload.sessionId();
             String prompt = startPayload == null ? "" : startPayload.request();
+            clearToolStatusState();
             if (!startSessionId.isBlank()) {
                 if (!startSessionId.equals(activeSessionId)) {
                     activeSessionId = startSessionId;
@@ -228,6 +245,7 @@ public final class AgentResponseOverlay {
                 content.append(markUserLines(prompt)).append("\n\n");
             }
             activeRequestId = normalizedId;
+            autoCreateSessionOnFirstSubmit = false;
             awaitingFirstAssistantDelta = true;
             parsedDirty = true;
             wrappedDirty = true;
@@ -258,6 +276,34 @@ public final class AgentResponseOverlay {
             visible = true;
         }
 
+        if (eventType == AgentStreamEventType.TOOL_STATUS) {
+            ToolStatusPayload status = ToolStatusPayload.fromJson(text);
+            if (status == null || status.shortText().isBlank()) {
+                clearToolStatusState();
+            } else {
+                String shortText = status.shortText().trim();
+                if (!shortText.equals(activeToolStatusText)) {
+                    toolStatusAnimStartEpochMs = System.currentTimeMillis();
+                }
+                activeToolStatusText = shortText;
+                activeToolStatusHover = status.hoverText() == null ? "" : status.hoverText().trim();
+                toolStatusShownEpochMs = System.currentTimeMillis();
+                toolStatusPendingClearEpochMs = 0L;
+            }
+            return;
+        }
+
+        if (eventType == AgentStreamEventType.TOOL_STATUS_CLEAR) {
+            ToolStatusPayload status = ToolStatusPayload.fromJson(text);
+            if (status != null && status.shortText() != null && !status.shortText().isBlank()) {
+                appendToolStatusCompletion(status.shortText().trim());
+                clearToolStatusState();
+                return;
+            }
+            requestToolStatusClear();
+            return;
+        }
+
         if (eventType == AgentStreamEventType.DELTA) {
             if (!text.isBlank()) {
                 awaitingFirstAssistantDelta = false;
@@ -271,12 +317,14 @@ public final class AgentResponseOverlay {
         if (eventType == AgentStreamEventType.ERROR) {
             awaitingFirstAssistantDelta = false;
             appendText(text);
+            clearToolStatusState();
             generating = false;
             return;
         }
 
         if (eventType == AgentStreamEventType.DONE) {
             awaitingFirstAssistantDelta = false;
+            clearToolStatusState();
             generating = false;
         }
     }
@@ -319,6 +367,7 @@ public final class AgentResponseOverlay {
         applyHistory(payload.history());
         activeRequestId = "";
         awaitingFirstAssistantDelta = false;
+        clearToolStatusState();
         generating = false;
         followTail = true;
         scrollY = 0.0;
@@ -350,6 +399,7 @@ public final class AgentResponseOverlay {
         activePersona = payload.activePersona() == null ? "" : payload.activePersona().trim();
         activeSessionId = payload.activeSessionId() == null ? "" : payload.activeSessionId().trim();
         awaitingFirstAssistantDelta = false;
+        clearToolStatusState();
         assetsScrollY = 0.0;
         assetRows.clear();
         assetFilterButtons.clear();
@@ -377,6 +427,10 @@ public final class AgentResponseOverlay {
     public static void tick(MinecraftClient client) {
         if (client == null) {
             return;
+        }
+        long now = System.currentTimeMillis();
+        if (toolStatusPendingClearEpochMs > 0L && now >= toolStatusPendingClearEpochMs) {
+            clearToolStatusState();
         }
         if (!guiEnabled) {
             hideAll();
@@ -492,12 +546,14 @@ public final class AgentResponseOverlay {
             if (newSessionButton.contains(mouseX, mouseY)) {
                 mode = OverlayMode.RESPONSE;
                 clearResponseContent();
+                autoCreateSessionOnFirstSubmit = false;
                 sendCommand(client, "mineclawd sessions new");
                 return true;
             }
             SessionRowBounds row = findSessionRow(mouseX, mouseY);
             if (row != null && row.sessionId != null && !row.sessionId.isBlank()) {
                 mode = OverlayMode.RESPONSE;
+                autoCreateSessionOnFirstSubmit = false;
                 sendCommand(client, "mineclawd sessions resume " + row.sessionId);
                 return true;
             }
@@ -672,10 +728,10 @@ public final class AgentResponseOverlay {
         if (!isOverlayEnabled() || !isInteractive(client) || !visible || minimized) {
             return false;
         }
-        // When input is not focused or input bar is not shown, still consume char events
-        // to prevent them from leaking to the underlying screen (e.g. chat bar)
+        // When input is not focused or input bar is not shown, don't consume char events
+        // so they can reach the underlying screen (e.g. chat bar)
         if (!inputFocused || !shouldRenderInputBar()) {
-            return true;
+            return false;
         }
         if (Character.isISOControl(character)) {
             return true;
@@ -699,10 +755,10 @@ public final class AgentResponseOverlay {
             // Let Escape pass through to close the underlying screen
             return false;
         }
-        // When the input bar is not shown or not focused, still consume all non-Escape
-        // key events to prevent them from leaking to the underlying screen
+        // When the input bar is not shown or not focused, don't consume non-Escape
+        // key events so they can reach the underlying screen
         if (!shouldRenderInputBar() || !inputFocused) {
-            return true;
+            return false;
         }
         boolean ctrl = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0;
         boolean shift = (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
@@ -810,14 +866,17 @@ public final class AgentResponseOverlay {
             } else if (generating) {
                 statusText = "Streaming";
             }
+            toolStatusBounds.clear();
             if (!statusText.isBlank() && headerTextRightLimit > personaLeft) {
                 int statusMaxWidth = headerTextRightLimit - personaLeft;
                 if (statusMaxWidth > 0) {
-                String visibleStatus = renderer.trimToWidth(statusText, statusMaxWidth);
-                int statusWidth = renderer.getWidth(visibleStatus);
-                int statusLeft = headerTextRightLimit - statusWidth;
-                context.drawTextWithShadow(renderer, visibleStatus, statusLeft, panelY + 7, statusColor);
-                headerTextRightLimit = statusLeft - 8;
+                    String visibleStatus = renderer.trimToWidth(statusText, statusMaxWidth);
+                    int statusWidth = renderer.getWidth(visibleStatus);
+                    if (statusWidth > 0) {
+                        int statusLeft = headerTextRightLimit - statusWidth;
+                        context.drawTextWithShadow(renderer, visibleStatus, statusLeft, panelY + 7, statusColor);
+                        headerTextRightLimit = statusLeft - 8;
+                    }
                 }
             }
 
@@ -905,6 +964,9 @@ public final class AgentResponseOverlay {
                 context.getMatrices().pop();
             } else {
                 menuItems.clear();
+            }
+            if (interactiveMode && toolStatusBounds.contains(mouseX, mouseY) && !activeToolStatusHover.isBlank()) {
+                renderSimpleTooltip(context, renderer, client, mouseX, mouseY, activeToolStatusHover);
             }
         } finally {
             context.getMatrices().pop();
@@ -997,6 +1059,8 @@ public final class AgentResponseOverlay {
     ) {
         rebuildWrappedLines(renderer, contentWidth, MinecraftClient.getInstance());
         List<OrderedText> thinkingLines = buildThinkingLines(renderer, contentWidth);
+        String activeToolLine = activeToolStatusText == null ? "" : renderer.trimToWidth(activeToolStatusText, Math.max(8, contentWidth));
+        boolean hasActiveToolLine = !activeToolLine.isBlank();
 
         if (followTail) {
             scrollY = maxResponseScroll(MinecraftClient.getInstance());
@@ -1008,9 +1072,20 @@ public final class AgentResponseOverlay {
         int y = contentTop - (int) Math.round(scrollY);
 
         context.enableScissor(contentLeft, contentTop, contentRight, contentBottom);
+        toolStatusBounds.clear();
         for (OrderedText line : wrappedLines) {
             if (y + lineHeight >= contentTop && y <= contentBottom) {
                 context.drawTextWithShadow(renderer, line, contentLeft, y, 0xFFE7EEF8);
+            }
+            y += lineHeight;
+        }
+        if (hasActiveToolLine) {
+            if (y + lineHeight >= contentTop && y <= contentBottom) {
+                drawAnimatedToolStatus(context, renderer, activeToolLine, contentLeft, y, TOOL_TEXT_COLOR);
+                int statusWidth = renderer.getWidth(activeToolLine);
+                if (statusWidth > 0) {
+                    toolStatusBounds.set(contentLeft, y - 1, contentLeft + statusWidth, y + lineHeight);
+                }
             }
             y += lineHeight;
         }
@@ -1024,12 +1099,12 @@ public final class AgentResponseOverlay {
         if (generating && !shouldShowThinkingPlaceholder() && ((System.currentTimeMillis() / CURSOR_BLINK_MS) % 2L == 0L)) {
             int cursorY = contentTop - (int) Math.round(scrollY);
             int cursorX = contentLeft;
-            List<OrderedText> renderLines = wrappedLines;
-            if (!thinkingLines.isEmpty()) {
-                renderLines = new ArrayList<>(wrappedLines.size() + thinkingLines.size());
-                renderLines.addAll(wrappedLines);
-                renderLines.addAll(thinkingLines);
+            List<OrderedText> renderLines = new ArrayList<>(wrappedLines.size() + thinkingLines.size() + (hasActiveToolLine ? 1 : 0));
+            renderLines.addAll(wrappedLines);
+            if (hasActiveToolLine) {
+                renderLines.add(Text.literal(activeToolLine).asOrderedText());
             }
+            renderLines.addAll(thinkingLines);
             if (!renderLines.isEmpty()) {
                 int lastLineIndex = renderLines.size() - 1;
                 OrderedText lastLine = renderLines.get(lastLineIndex);
@@ -1616,12 +1691,145 @@ public final class AgentResponseOverlay {
         return lines;
     }
 
+    private static void drawAnimatedToolStatus(
+            DrawContext context,
+            TextRenderer renderer,
+            String text,
+            int left,
+            int top,
+            int idleColor
+    ) {
+        if (context == null || renderer == null || text == null || text.isBlank()) {
+            return;
+        }
+        String value = text;
+        int length = value.length();
+        int window = Math.max(4, Math.min(TOOL_STATUS_WINDOW_CHARS, length));
+        int positions = Math.max(1, (length - window) + 1);
+        long cycleMoveMs = positions * TOOL_STATUS_ANIM_STEP_MS;
+        long cycleMs = cycleMoveMs + TOOL_STATUS_ANIM_PAUSE_MS;
+        if (toolStatusAnimStartEpochMs <= 0L) {
+            toolStatusAnimStartEpochMs = System.currentTimeMillis();
+        }
+        long elapsed = Math.max(0L, System.currentTimeMillis() - toolStatusAnimStartEpochMs);
+        long phase = cycleMs <= 0L ? 0L : (elapsed % cycleMs);
+        int highlightStart = phase >= cycleMoveMs
+                ? (positions - 1)
+                : (int) Math.min(positions - 1, phase / TOOL_STATUS_ANIM_STEP_MS);
+        int highlightEnd = Math.min(length, highlightStart + window);
+
+        String prefix = value.substring(0, highlightStart);
+        String highlight = value.substring(highlightStart, highlightEnd);
+        String suffix = value.substring(highlightEnd);
+
+        int cursorX = left;
+        if (!prefix.isEmpty()) {
+            context.drawTextWithShadow(renderer, prefix, cursorX, top, idleColor);
+            cursorX += renderer.getWidth(prefix);
+        }
+        if (!highlight.isEmpty()) {
+            context.drawTextWithShadow(renderer, highlight, cursorX, top, 0xFFF2F6FF);
+            cursorX += renderer.getWidth(highlight);
+        }
+        if (!suffix.isEmpty()) {
+            context.drawTextWithShadow(renderer, suffix, cursorX, top, idleColor);
+        }
+    }
+
+    private static void renderSimpleTooltip(
+            DrawContext context,
+            TextRenderer renderer,
+            MinecraftClient client,
+            int mouseX,
+            int mouseY,
+            String text
+    ) {
+        if (context == null || renderer == null || client == null || text == null || text.isBlank()) {
+            return;
+        }
+        List<OrderedText> lines = renderer.wrapLines(Text.literal(text), TOOL_STATUS_TOOLTIP_MAX_WIDTH);
+        if (lines == null || lines.isEmpty()) {
+            lines = List.of(Text.literal(text).asOrderedText());
+        }
+
+        int maxWidth = 0;
+        for (OrderedText line : lines) {
+            if (line == null) {
+                continue;
+            }
+            maxWidth = Math.max(maxWidth, renderer.getWidth(line));
+        }
+        int padding = 4;
+        int lineHeight = renderer.fontHeight + 1;
+        int boxWidth = maxWidth + (padding * 2);
+        int boxHeight = (lines.size() * lineHeight) + (padding * 2);
+
+        int screenWidth = client.getWindow().getScaledWidth();
+        int screenHeight = client.getWindow().getScaledHeight();
+        int x = mouseX + 10;
+        int y = mouseY + 10;
+        if (x + boxWidth > screenWidth - 6) {
+            x = Math.max(6, mouseX - boxWidth - 10);
+        }
+        if (y + boxHeight > screenHeight - 6) {
+            y = Math.max(6, mouseY - boxHeight - 10);
+        }
+
+        context.fill(x, y, x + boxWidth, y + boxHeight, 0xF018202B);
+        context.fill(x, y, x + boxWidth, y + 1, 0xFF9BB2CA);
+        context.fill(x, y + boxHeight - 1, x + boxWidth, y + boxHeight, 0xFF9BB2CA);
+        context.fill(x, y, x + 1, y + boxHeight, 0xFF9BB2CA);
+        context.fill(x + boxWidth - 1, y, x + boxWidth, y + boxHeight, 0xFF9BB2CA);
+
+        int lineY = y + padding;
+        for (OrderedText line : lines) {
+            context.drawTextWithShadow(renderer, line, x + padding, lineY, 0xFFF3F7FF);
+            lineY += lineHeight;
+        }
+    }
+
+    private static void clearToolStatusState() {
+        activeToolStatusText = "";
+        activeToolStatusHover = "";
+        toolStatusAnimStartEpochMs = 0L;
+        toolStatusShownEpochMs = 0L;
+        toolStatusPendingClearEpochMs = 0L;
+        toolStatusBounds.clear();
+    }
+
+    private static void requestToolStatusClear() {
+        if (activeToolStatusText.isBlank()) {
+            clearToolStatusState();
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long elapsed = toolStatusShownEpochMs <= 0L ? TOOL_STATUS_MIN_VISIBLE_MS : now - toolStatusShownEpochMs;
+        if (elapsed >= TOOL_STATUS_MIN_VISIBLE_MS) {
+            clearToolStatusState();
+            return;
+        }
+        toolStatusPendingClearEpochMs = now + (TOOL_STATUS_MIN_VISIBLE_MS - elapsed);
+    }
+
     private static void appendText(String text) {
         if (text == null || text.isEmpty()) {
             return;
         }
         followTail = followTail || isNearTail();
         content.append(text);
+        parsedDirty = true;
+        wrappedDirty = true;
+    }
+
+    private static void appendToolStatusCompletion(String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        followTail = followTail || isNearTail();
+        if (content.length() > 0 && content.charAt(content.length() - 1) != '\n') {
+            content.append('\n');
+        }
+        content.append(markToolLines(text.trim())).append('\n');
         parsedDirty = true;
         wrappedDirty = true;
     }
@@ -1696,10 +1904,21 @@ public final class AgentResponseOverlay {
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i] == null ? "" : lines[i];
             boolean userLine = line.startsWith(USER_MARKER);
-            String raw = userLine ? line.substring(USER_MARKER.length()) : line;
+            boolean toolLine = line.startsWith(TOOL_MARKER);
+            String raw;
+            if (userLine) {
+                raw = line.substring(USER_MARKER.length());
+            } else if (toolLine) {
+                raw = line.substring(TOOL_MARKER.length());
+            } else {
+                raw = line;
+            }
             Text parsed = parseSingleMineDownLine(client, raw);
             if (userLine) {
                 parsed = withUserHighlight(parsed);
+                nextAgentLineNeedsPrefix = true;
+            } else if (toolLine) {
+                parsed = withToolHighlight(parsed);
                 nextAgentLineNeedsPrefix = true;
             } else if (!raw.isBlank()) {
                 parsed = withAgentHighlight(parsed, nextAgentLineNeedsPrefix);
@@ -1756,6 +1975,14 @@ public final class AgentResponseOverlay {
         return Text.empty().append(prefix).append(contentText);
     }
 
+    private static Text withToolHighlight(Text body) {
+        MutableText contentText = body == null ? Text.empty() : body.copy();
+        if (contentText.getStyle().getColor() == null) {
+            contentText.setStyle(contentText.getStyle().withColor(TextColor.fromRgb(TOOL_TEXT_COLOR & 0xFFFFFF)));
+        }
+        return contentText;
+    }
+
     private static Text withAgentHighlight(Text body, boolean includePrefix) {
         if (body == null || body.getString().isBlank()) {
             return Text.empty();
@@ -1777,6 +2004,13 @@ public final class AgentResponseOverlay {
             return USER_MARKER;
         }
         return USER_MARKER + text.replace("\n", "\n" + USER_MARKER);
+    }
+
+    private static String markToolLines(String text) {
+        if (text == null || text.isBlank()) {
+            return TOOL_MARKER;
+        }
+        return TOOL_MARKER + text.replace("\n", "\n" + TOOL_MARKER);
     }
 
     private static String normalizeMineDownActions(String markdown) {
@@ -2040,7 +2274,10 @@ public final class AgentResponseOverlay {
         orbPressed = false;
         orbDragging = false;
         activeRequestId = "";
+        activeSessionId = "";
+        activePersona = "";
         awaitingFirstAssistantDelta = false;
+        clearToolStatusState();
         questionButtons.clear();
         sessionRows.clear();
         sessionItems.clear();
@@ -2210,6 +2447,9 @@ public final class AgentResponseOverlay {
         int inputOffset = shouldRenderInputBar() ? (INPUT_HEIGHT + INPUT_GAP) : 0;
         int contentHeight = Math.max(1, panelHeight - HEADER_HEIGHT - CONTENT_PADDING - 3 - questionOffset - inputOffset);
         int textHeight = wrappedLines.size() * lineHeight;
+        if (activeToolStatusText != null && !activeToolStatusText.isBlank()) {
+            textHeight += lineHeight;
+        }
         if (shouldShowThinkingPlaceholder()) {
             textHeight += lineHeight;
         }
@@ -2396,12 +2636,13 @@ public final class AgentResponseOverlay {
     }
 
     public static boolean capturesKeyboardInput(MinecraftClient client) {
-        // When the overlay panel is visible and expanded, capture ALL keyboard input
-        // to prevent it from leaking to the underlying screen (e.g. chat bar, etc.)
+        // Only capture keyboard input when the input bar is shown and focused
         return isOverlayEnabled()
                 && isInteractive(client)
                 && visible
-                && !minimized;
+                && !minimized
+                && shouldRenderInputBar()
+                && inputFocused;
     }
 
     public static boolean capturesMouseInput(MinecraftClient client, double mouseX, double mouseY) {
@@ -2588,6 +2829,7 @@ public final class AgentResponseOverlay {
         mode = OverlayMode.RESPONSE;
         menuOpen = false;
         clearResponseContent();
+        autoCreateSessionOnFirstSubmit = false;
         sendCommand(client, "mineclawd sessions new");
         String category = categoryDisplayName(item.category());
         String name = item.name() == null || item.name().isBlank() ? item.id() : item.name();
@@ -2940,6 +3182,10 @@ public final class AgentResponseOverlay {
         }
         mode = OverlayMode.RESPONSE;
         menuOpen = false;
+        if (autoCreateSessionOnFirstSubmit && activeSessionId.isBlank()) {
+            sendCommand(client, "mineclawd sessions new");
+            autoCreateSessionOnFirstSubmit = false;
+        }
         sendCommand(client, "mclawd " + draft);
         setInputDraftText("", true);
     }
@@ -2949,6 +3195,7 @@ public final class AgentResponseOverlay {
             return;
         }
         sendCommand(client, "mineclawd stop");
+        clearToolStatusState();
         generating = false;
         awaitingFirstAssistantDelta = false;
         activeRequestId = "";
@@ -3161,6 +3408,26 @@ public final class AgentResponseOverlay {
                         ? root.get("request").getAsString().trim()
                         : "";
                 return new StreamStartPayload(sessionId, request);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+    }
+
+    private record ToolStatusPayload(String shortText, String hoverText) {
+        private static ToolStatusPayload fromJson(String payload) {
+            if (payload == null || payload.isBlank()) {
+                return null;
+            }
+            try {
+                JsonObject root = JsonParser.parseString(payload).getAsJsonObject();
+                String shortText = root.has("short") && root.get("short").isJsonPrimitive()
+                        ? root.get("short").getAsString().trim()
+                        : "";
+                String hoverText = root.has("hover") && root.get("hover").isJsonPrimitive()
+                        ? root.get("hover").getAsString().trim()
+                        : "";
+                return new ToolStatusPayload(shortText, hoverText);
             } catch (Exception ignored) {
                 return null;
             }

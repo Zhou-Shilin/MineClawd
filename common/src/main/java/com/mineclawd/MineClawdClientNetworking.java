@@ -64,12 +64,7 @@ public final class MineClawdClientNetworking {
                     }
                     String finalBroadcastTarget = broadcastTarget;
                     MinecraftClient client = MinecraftClient.getInstance();
-                    client.execute(() -> {
-                        if (!isGuiEnabled()) {
-                            return;
-                        }
-                        openConfigScreen(client, finalBroadcastTarget);
-                    });
+                    client.execute(() -> openConfigScreen(client, finalBroadcastTarget));
                 });
 
         NetworkManager.registerReceiver(NetworkManager.s2c(), MineClawdNetworking.SYNC_BROADCAST_TARGET,
@@ -235,6 +230,9 @@ public final class MineClawdClientNetworking {
     }
 
     private static void openConfigScreen(MinecraftClient client, String broadcastTarget) {
+        if (!isGuiEnabled()) {
+            return;
+        }
         if (!HAS_YACL) {
             if (client.player != null) {
                 client.player.sendMessage(Text.literal("[MineClawd] Config UI requires YACL on this client."), false);
@@ -243,36 +241,28 @@ public final class MineClawdClientNetworking {
         }
         syncBroadcastTargetFromServer(broadcastTarget);
         try {
-            Class<?> configScreenClass = Class.forName("com.mineclawd.config.MineClawdConfigScreen");
-            Method create = configScreenClass.getMethod("create", Screen.class, String.class);
-            Object created = create.invoke(null, client.currentScreen, broadcastTarget);
-            if (created instanceof Screen screen) {
-                client.setScreen(screen);
-            }
+            Class<?> cls = Class.forName("com.mineclawd.config.MineClawdConfigScreen");
+            Method create = cls.getMethod("create", Screen.class, String.class);
+            Object screen = create.invoke(null, client.currentScreen, broadcastTarget);
+            if (screen instanceof Screen s) client.setScreen(s);
         } catch (ReflectiveOperationException ignored) {
         }
     }
 
     private static void syncBroadcastTargetFromServer(String value) {
-        if (!HAS_YACL) {
-            return;
-        }
+        if (!HAS_YACL) return;
         try {
-            Class<?> configScreenClass = Class.forName("com.mineclawd.config.MineClawdConfigScreen");
-            Method method = configScreenClass.getMethod("syncBroadcastTargetFromServer", String.class);
-            method.invoke(null, value);
+            Class<?> cls = Class.forName("com.mineclawd.config.MineClawdConfigScreen");
+            cls.getMethod("syncBroadcastTargetFromServer", String.class).invoke(null, value);
         } catch (ReflectiveOperationException ignored) {
         }
     }
 
     private static void clearBroadcastTargetServerSync() {
-        if (!HAS_YACL) {
-            return;
-        }
+        if (!HAS_YACL) return;
         try {
-            Class<?> configScreenClass = Class.forName("com.mineclawd.config.MineClawdConfigScreen");
-            Method method = configScreenClass.getMethod("clearBroadcastTargetServerSync");
-            method.invoke(null);
+            Class<?> cls = Class.forName("com.mineclawd.config.MineClawdConfigScreen");
+            cls.getMethod("clearBroadcastTargetServerSync").invoke(null);
         } catch (ReflectiveOperationException ignored) {
         }
     }
