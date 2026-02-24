@@ -42,6 +42,19 @@ public final class DynamicContentRegistry {
     private static final String DEFAULT_ITEM_MATERIAL = "minecraft:stick";
     private static final String DEFAULT_BLOCK_MATERIAL = "minecraft:stone";
     private static final String DEFAULT_FLUID_MATERIAL = "minecraft:water";
+    private static final float DEFAULT_ITEM_THROW_SPEED = 1.5F;
+    private static final float DEFAULT_ITEM_THROW_DIVERGENCE = 1.0F;
+    private static final int DEFAULT_ITEM_THROW_COOLDOWN_TICKS = 0;
+    private static final int DEFAULT_ITEM_MAX_COUNT = 0;
+    private static final int DEFAULT_ITEM_USE_TIME_TICKS = 0;
+    private static final String DEFAULT_ITEM_USE_ACTION = "material";
+    private static final String DEFAULT_ITEM_GLINT_MODE = "material";
+    private static final float DEFAULT_BLOCK_VELOCITY_MULTIPLIER = 1.0F;
+    private static final float DEFAULT_BLOCK_JUMP_VELOCITY_MULTIPLIER = 1.0F;
+    private static final float DEFAULT_FLUID_BLAST_RESISTANCE = 100.0F;
+    private static final int DEFAULT_FLUID_TICK_RATE = 5;
+    private static final int DEFAULT_FLUID_FLOW_SPEED = 4;
+    private static final int DEFAULT_FLUID_LEVEL_DECREASE = 1;
 
     private static final DynamicItem[] ITEM_PLACEHOLDERS = new DynamicItem[SLOT_COUNT];
     private static final DynamicBlock[] BLOCK_PLACEHOLDERS = new DynamicBlock[SLOT_COUNT];
@@ -122,11 +135,74 @@ public final class DynamicContentRegistry {
         return OperationResult.success(out.toString().trim());
     }
 
+    public static synchronized OperationResult listEditableProperties(String typeInput) {
+        String normalized = typeInput == null ? "" : typeInput.trim().toLowerCase(Locale.ROOT);
+        boolean includeItems = normalized.isBlank() || "all".equals(normalized) || "item".equals(normalized) || "items".equals(normalized);
+        boolean includeBlocks = normalized.isBlank() || "all".equals(normalized) || "block".equals(normalized) || "blocks".equals(normalized);
+        boolean includeFluids = normalized.isBlank() || "all".equals(normalized) || "fluid".equals(normalized) || "fluids".equals(normalized);
+        if (!includeItems && !includeBlocks && !includeFluids) {
+            return OperationResult.error("Unknown `type`. Use one of: item, block, fluid, all.");
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("Editable dynamic properties");
+        if (!runtimeEnabled) {
+            out.append(" (registry currently disabled in this environment)");
+        }
+        out.append("\n");
+
+        if (includeItems) {
+            out.append("\n[item]\n")
+                    .append("- name (string)\n")
+                    .append("- material_item (vanilla item id)\n")
+                    .append("- throwable (boolean)\n")
+                    .append("- throw_speed (number, 0.1..4.0, default ").append(DEFAULT_ITEM_THROW_SPEED).append(")\n")
+                    .append("- throw_inaccuracy (number, 0.0..5.0, default ").append(DEFAULT_ITEM_THROW_DIVERGENCE).append(")\n")
+                    .append("- throw_cooldown_ticks (integer, 0..1200, default ").append(DEFAULT_ITEM_THROW_COOLDOWN_TICKS).append(")\n")
+                    .append("- consume_on_throw (boolean, default true)\n")
+                    .append("- max_count (integer, 0..99, default 0, 0 means follow material)\n")
+                    .append("- use_action (enum: material, none, eat, drink, bow, spear, crossbow, spyglass, toot_horn, brush, block)\n")
+                    .append("- use_time_ticks (integer, 0..72000, default 0, 0 means follow material)\n")
+                    .append("- glint_mode (enum: material, true, false)\n");
+        }
+        if (includeBlocks) {
+            out.append("\n[block]\n")
+                    .append("- name (string)\n")
+                    .append("- material_block (vanilla block id)\n")
+                    .append("- friction (number, 0.0..2.0)\n")
+                    .append("- velocity_multiplier (number, 0.0..10.0, default ").append(DEFAULT_BLOCK_VELOCITY_MULTIPLIER).append(")\n")
+                    .append("- jump_velocity_multiplier (number, 0.0..10.0, default ").append(DEFAULT_BLOCK_JUMP_VELOCITY_MULTIPLIER).append(")\n")
+                    .append("- blast_resistance (number, 0.0..1200.0, default from material block)\n")
+                    .append("- use_material_sounds (boolean, default true)\n");
+        }
+        if (includeFluids) {
+            out.append("\n[fluid]\n")
+                    .append("- name (string)\n")
+                    .append("- material_fluid (vanilla fluid id)\n")
+                    .append("- color (string, #RRGGBB or default)\n")
+                    .append("- tick_rate (integer, 1..200, default ").append(DEFAULT_FLUID_TICK_RATE).append(")\n")
+                    .append("- flow_speed (integer, 1..16, default ").append(DEFAULT_FLUID_FLOW_SPEED).append(")\n")
+                    .append("- level_decrease_per_block (integer, 1..8, default ").append(DEFAULT_FLUID_LEVEL_DECREASE).append(")\n")
+                    .append("- blast_resistance (number, 0.0..1200.0, default ").append(DEFAULT_FLUID_BLAST_RESISTANCE).append(")\n")
+                    .append("- infinite (boolean, default true)\n");
+        }
+
+        return OperationResult.success(out.toString().trim());
+    }
+
     public static synchronized OperationResult registerItem(
             Integer requestedSlot,
             String displayName,
             String materialItemInput,
-            Boolean throwable
+            Boolean throwable,
+            Double throwSpeedInput,
+            Double throwDivergenceInput,
+            Integer throwCooldownTicksInput,
+            Boolean consumeOnThrowInput,
+            Integer maxCountInput,
+            String useActionInput,
+            Integer useTimeTicksInput,
+            String glintModeInput
     ) {
         if (!runtimeEnabled) {
             return disabledResult();
@@ -147,13 +223,60 @@ public final class DynamicContentRegistry {
 
         String finalName = normalizeName(displayName, current.displayName(), "Dynamic Item " + slotLabel(slot));
         boolean finalThrowable = throwable == null ? current.throwable() : throwable;
-        ITEM_STATES.set(slot, new ItemSlotState(true, finalName, materialItemId, finalThrowable));
+        float finalThrowSpeed = throwSpeedInput == null
+                ? (current.active() ? current.throwSpeed() : DEFAULT_ITEM_THROW_SPEED)
+                : clampItemThrowSpeed(throwSpeedInput.floatValue());
+        float finalThrowDivergence = throwDivergenceInput == null
+                ? (current.active() ? current.throwDivergence() : DEFAULT_ITEM_THROW_DIVERGENCE)
+                : clampItemThrowDivergence(throwDivergenceInput.floatValue());
+        int finalThrowCooldownTicks = throwCooldownTicksInput == null
+                ? (current.active() ? current.throwCooldownTicks() : DEFAULT_ITEM_THROW_COOLDOWN_TICKS)
+                : clampItemThrowCooldownTicks(throwCooldownTicksInput);
+        boolean finalConsumeOnThrow = consumeOnThrowInput == null
+                ? (current.active() ? current.consumeOnThrow() : true)
+                : consumeOnThrowInput;
+        int finalMaxCount = maxCountInput == null
+                ? current.maxCount()
+                : clampItemMaxCount(maxCountInput);
+        String finalUseAction = parseItemUseAction(useActionInput, current.useAction());
+        if (finalUseAction == null) {
+            return OperationResult.error("`use_action` must be one of: material, none, eat, drink, bow, spear, crossbow, spyglass, toot_horn, brush, block.");
+        }
+        int finalUseTimeTicks = useTimeTicksInput == null
+                ? current.useTimeTicks()
+                : clampItemUseTimeTicks(useTimeTicksInput);
+        String finalGlintMode = parseItemGlintMode(glintModeInput, current.glintMode());
+        if (finalGlintMode == null) {
+            return OperationResult.error("`glint_mode` must be one of: material, true, false.");
+        }
+        ITEM_STATES.set(slot, new ItemSlotState(
+                true,
+                finalName,
+                materialItemId,
+                finalThrowable,
+                finalThrowSpeed,
+                finalThrowDivergence,
+                finalThrowCooldownTicks,
+                finalConsumeOnThrow,
+                finalMaxCount,
+                finalUseAction,
+                finalUseTimeTicks,
+                finalGlintMode
+        ));
 
         return OperationResult.success(
                 "Registered item slot " + slotNumber(slot) + " -> `" + itemIdString(slot) + "`\n"
                         + "name: " + finalName + "\n"
                         + "material_item: " + materialItemId + "\n"
-                        + "throwable: " + finalThrowable
+                        + "throwable: " + finalThrowable + "\n"
+                        + "throw_speed: " + finalThrowSpeed + "\n"
+                        + "throw_inaccuracy: " + finalThrowDivergence + "\n"
+                        + "throw_cooldown_ticks: " + finalThrowCooldownTicks + "\n"
+                        + "consume_on_throw: " + finalConsumeOnThrow + "\n"
+                        + "max_count: " + finalMaxCount + " (0=material)\n"
+                        + "use_action: " + finalUseAction + "\n"
+                        + "use_time_ticks: " + finalUseTimeTicks + " (0=material)\n"
+                        + "glint_mode: " + finalGlintMode
         );
     }
 
@@ -161,7 +284,11 @@ public final class DynamicContentRegistry {
             Integer requestedSlot,
             String displayName,
             String materialBlockInput,
-            Double frictionInput
+            Double frictionInput,
+            Double velocityMultiplierInput,
+            Double jumpVelocityMultiplierInput,
+            Double blastResistanceInput,
+            Boolean useMaterialSoundsInput
     ) {
         if (!runtimeEnabled) {
             return disabledResult();
@@ -183,14 +310,39 @@ public final class DynamicContentRegistry {
         float friction = frictionInput == null
                 ? (current.active() ? current.friction() : defaultFrictionFromMaterial(materialBlockId))
                 : clampFriction(frictionInput.floatValue());
+        float velocityMultiplier = velocityMultiplierInput == null
+                ? (current.active() ? current.velocityMultiplier() : DEFAULT_BLOCK_VELOCITY_MULTIPLIER)
+                : clampVelocityMultiplier(velocityMultiplierInput.floatValue());
+        float jumpVelocityMultiplier = jumpVelocityMultiplierInput == null
+                ? (current.active() ? current.jumpVelocityMultiplier() : DEFAULT_BLOCK_JUMP_VELOCITY_MULTIPLIER)
+                : clampJumpVelocityMultiplier(jumpVelocityMultiplierInput.floatValue());
+        float blastResistance = blastResistanceInput == null
+                ? (current.active() ? current.blastResistance() : defaultBlockBlastResistanceFromMaterial(materialBlockId))
+                : clampBlastResistance(blastResistanceInput.floatValue());
+        boolean useMaterialSounds = useMaterialSoundsInput == null
+                ? (current.active() ? current.useMaterialSounds() : true)
+                : useMaterialSoundsInput;
         String finalName = normalizeName(displayName, current.displayName(), "Dynamic Block " + slotLabel(slot));
-        BLOCK_STATES.set(slot, new BlockSlotState(true, finalName, materialBlockId, friction));
+        BLOCK_STATES.set(slot, new BlockSlotState(
+                true,
+                finalName,
+                materialBlockId,
+                friction,
+                velocityMultiplier,
+                jumpVelocityMultiplier,
+                blastResistance,
+                useMaterialSounds
+        ));
 
         return OperationResult.success(
                 "Registered block slot " + slotNumber(slot) + " -> `" + blockIdString(slot) + "`\n"
                         + "name: " + finalName + "\n"
                         + "material_block: " + materialBlockId + "\n"
-                        + "friction: " + friction
+                        + "friction: " + friction + "\n"
+                        + "velocity_multiplier: " + velocityMultiplier + "\n"
+                        + "jump_velocity_multiplier: " + jumpVelocityMultiplier + "\n"
+                        + "blast_resistance: " + blastResistance + "\n"
+                        + "use_material_sounds: " + useMaterialSounds
         );
     }
 
@@ -198,7 +350,12 @@ public final class DynamicContentRegistry {
             Integer requestedSlot,
             String displayName,
             String materialFluidInput,
-            String colorInput
+            String colorInput,
+            Integer tickRateInput,
+            Integer flowSpeedInput,
+            Integer levelDecreaseInput,
+            Double blastResistanceInput,
+            Boolean infiniteInput
     ) {
         if (!runtimeEnabled) {
             return disabledResult();
@@ -223,7 +380,32 @@ public final class DynamicContentRegistry {
         }
 
         String finalName = normalizeName(displayName, current.displayName(), "Dynamic Fluid " + slotLabel(slot));
-        FLUID_STATES.set(slot, new FluidSlotState(true, finalName, materialFluidId, color));
+        int tickRate = tickRateInput == null
+                ? (current.active() ? current.tickRate() : DEFAULT_FLUID_TICK_RATE)
+                : clampFluidTickRate(tickRateInput);
+        int flowSpeed = flowSpeedInput == null
+                ? (current.active() ? current.flowSpeed() : DEFAULT_FLUID_FLOW_SPEED)
+                : clampFluidFlowSpeed(flowSpeedInput);
+        int levelDecrease = levelDecreaseInput == null
+                ? (current.active() ? current.levelDecreasePerBlock() : DEFAULT_FLUID_LEVEL_DECREASE)
+                : clampFluidLevelDecrease(levelDecreaseInput);
+        float blastResistance = blastResistanceInput == null
+                ? (current.active() ? current.blastResistance() : DEFAULT_FLUID_BLAST_RESISTANCE)
+                : clampBlastResistance(blastResistanceInput.floatValue());
+        boolean infinite = infiniteInput == null
+                ? (current.active() ? current.infinite() : true)
+                : infiniteInput;
+        FLUID_STATES.set(slot, new FluidSlotState(
+                true,
+                finalName,
+                materialFluidId,
+                color,
+                tickRate,
+                flowSpeed,
+                levelDecrease,
+                blastResistance,
+                infinite
+        ));
 
         String colorText = color == null
                 ? "default(from material)"
@@ -232,6 +414,11 @@ public final class DynamicContentRegistry {
                 "Registered fluid slot " + slotNumber(slot) + " -> `" + fluidStillIdString(slot) + "`\n"
                         + "name: " + finalName + "\n"
                         + "material_fluid: " + materialFluidId + "\n"
+                        + "tick_rate: " + tickRate + "\n"
+                        + "flow_speed: " + flowSpeed + "\n"
+                        + "level_decrease_per_block: " + levelDecrease + "\n"
+                        + "blast_resistance: " + blastResistance + "\n"
+                        + "infinite: " + infinite + "\n"
                         + "color: " + colorText + "\n"
                         + "bucket item: `" + fluidBucketIdString(slot) + "`"
         );
@@ -277,7 +464,15 @@ public final class DynamicContentRegistry {
             Integer slotInput,
             String displayName,
             String materialItemInput,
-            Boolean throwable
+            Boolean throwable,
+            Double throwSpeedInput,
+            Double throwDivergenceInput,
+            Integer throwCooldownTicksInput,
+            Boolean consumeOnThrowInput,
+            Integer maxCountInput,
+            String useActionInput,
+            Integer useTimeTicksInput,
+            String glintModeInput
     ) {
         if (!runtimeEnabled) {
             return disabledResult();
@@ -300,13 +495,60 @@ public final class DynamicContentRegistry {
         }
         String finalName = normalizeName(displayName, current.displayName(), current.displayName());
         boolean finalThrowable = throwable == null ? current.throwable() : throwable;
-        ITEM_STATES.set(slot, new ItemSlotState(true, finalName, materialItemId, finalThrowable));
+        float finalThrowSpeed = throwSpeedInput == null
+                ? current.throwSpeed()
+                : clampItemThrowSpeed(throwSpeedInput.floatValue());
+        float finalThrowDivergence = throwDivergenceInput == null
+                ? current.throwDivergence()
+                : clampItemThrowDivergence(throwDivergenceInput.floatValue());
+        int finalThrowCooldownTicks = throwCooldownTicksInput == null
+                ? current.throwCooldownTicks()
+                : clampItemThrowCooldownTicks(throwCooldownTicksInput);
+        boolean finalConsumeOnThrow = consumeOnThrowInput == null
+                ? current.consumeOnThrow()
+                : consumeOnThrowInput;
+        int finalMaxCount = maxCountInput == null
+                ? current.maxCount()
+                : clampItemMaxCount(maxCountInput);
+        String finalUseAction = parseItemUseAction(useActionInput, current.useAction());
+        if (finalUseAction == null) {
+            return OperationResult.error("`use_action` must be one of: material, none, eat, drink, bow, spear, crossbow, spyglass, toot_horn, brush, block.");
+        }
+        int finalUseTimeTicks = useTimeTicksInput == null
+                ? current.useTimeTicks()
+                : clampItemUseTimeTicks(useTimeTicksInput);
+        String finalGlintMode = parseItemGlintMode(glintModeInput, current.glintMode());
+        if (finalGlintMode == null) {
+            return OperationResult.error("`glint_mode` must be one of: material, true, false.");
+        }
+        ITEM_STATES.set(slot, new ItemSlotState(
+                true,
+                finalName,
+                materialItemId,
+                finalThrowable,
+                finalThrowSpeed,
+                finalThrowDivergence,
+                finalThrowCooldownTicks,
+                finalConsumeOnThrow,
+                finalMaxCount,
+                finalUseAction,
+                finalUseTimeTicks,
+                finalGlintMode
+        ));
 
         return OperationResult.success(
                 "Updated item slot " + slotNumber(slot) + " -> `" + itemIdString(slot) + "`\n"
                         + "name: " + finalName + "\n"
                         + "material_item: " + materialItemId + "\n"
-                        + "throwable: " + finalThrowable
+                        + "throwable: " + finalThrowable + "\n"
+                        + "throw_speed: " + finalThrowSpeed + "\n"
+                        + "throw_inaccuracy: " + finalThrowDivergence + "\n"
+                        + "throw_cooldown_ticks: " + finalThrowCooldownTicks + "\n"
+                        + "consume_on_throw: " + finalConsumeOnThrow + "\n"
+                        + "max_count: " + finalMaxCount + " (0=material)\n"
+                        + "use_action: " + finalUseAction + "\n"
+                        + "use_time_ticks: " + finalUseTimeTicks + " (0=material)\n"
+                        + "glint_mode: " + finalGlintMode
         );
     }
 
@@ -314,7 +556,11 @@ public final class DynamicContentRegistry {
             Integer slotInput,
             String displayName,
             String materialBlockInput,
-            Double frictionInput
+            Double frictionInput,
+            Double velocityMultiplierInput,
+            Double jumpVelocityMultiplierInput,
+            Double blastResistanceInput,
+            Boolean useMaterialSoundsInput
     ) {
         if (!runtimeEnabled) {
             return disabledResult();
@@ -336,14 +582,39 @@ public final class DynamicContentRegistry {
             return OperationResult.error("`material_block` must reference a vanilla block id such as `minecraft:ice`.");
         }
         float friction = frictionInput == null ? current.friction() : clampFriction(frictionInput.floatValue());
+        float velocityMultiplier = velocityMultiplierInput == null
+                ? current.velocityMultiplier()
+                : clampVelocityMultiplier(velocityMultiplierInput.floatValue());
+        float jumpVelocityMultiplier = jumpVelocityMultiplierInput == null
+                ? current.jumpVelocityMultiplier()
+                : clampJumpVelocityMultiplier(jumpVelocityMultiplierInput.floatValue());
+        float blastResistance = blastResistanceInput == null
+                ? current.blastResistance()
+                : clampBlastResistance(blastResistanceInput.floatValue());
+        boolean useMaterialSounds = useMaterialSoundsInput == null
+                ? current.useMaterialSounds()
+                : useMaterialSoundsInput;
         String finalName = normalizeName(displayName, current.displayName(), current.displayName());
-        BLOCK_STATES.set(slot, new BlockSlotState(true, finalName, materialBlockId, friction));
+        BLOCK_STATES.set(slot, new BlockSlotState(
+                true,
+                finalName,
+                materialBlockId,
+                friction,
+                velocityMultiplier,
+                jumpVelocityMultiplier,
+                blastResistance,
+                useMaterialSounds
+        ));
 
         return OperationResult.success(
                 "Updated block slot " + slotNumber(slot) + " -> `" + blockIdString(slot) + "`\n"
                         + "name: " + finalName + "\n"
                         + "material_block: " + materialBlockId + "\n"
-                        + "friction: " + friction
+                        + "friction: " + friction + "\n"
+                        + "velocity_multiplier: " + velocityMultiplier + "\n"
+                        + "jump_velocity_multiplier: " + jumpVelocityMultiplier + "\n"
+                        + "blast_resistance: " + blastResistance + "\n"
+                        + "use_material_sounds: " + useMaterialSounds
         );
     }
 
@@ -351,7 +622,12 @@ public final class DynamicContentRegistry {
             Integer slotInput,
             String displayName,
             String materialFluidInput,
-            String colorInput
+            String colorInput,
+            Integer tickRateInput,
+            Integer flowSpeedInput,
+            Integer levelDecreaseInput,
+            Double blastResistanceInput,
+            Boolean infiniteInput
     ) {
         if (!runtimeEnabled) {
             return disabledResult();
@@ -377,13 +653,35 @@ public final class DynamicContentRegistry {
             return OperationResult.error("`color` must be `#RRGGBB`, `RRGGBB`, or `default`.");
         }
         String finalName = normalizeName(displayName, current.displayName(), current.displayName());
-        FLUID_STATES.set(slot, new FluidSlotState(true, finalName, materialFluidId, color));
+        int tickRate = tickRateInput == null ? current.tickRate() : clampFluidTickRate(tickRateInput);
+        int flowSpeed = flowSpeedInput == null ? current.flowSpeed() : clampFluidFlowSpeed(flowSpeedInput);
+        int levelDecrease = levelDecreaseInput == null ? current.levelDecreasePerBlock() : clampFluidLevelDecrease(levelDecreaseInput);
+        float blastResistance = blastResistanceInput == null
+                ? current.blastResistance()
+                : clampBlastResistance(blastResistanceInput.floatValue());
+        boolean infinite = infiniteInput == null ? current.infinite() : infiniteInput;
+        FLUID_STATES.set(slot, new FluidSlotState(
+                true,
+                finalName,
+                materialFluidId,
+                color,
+                tickRate,
+                flowSpeed,
+                levelDecrease,
+                blastResistance,
+                infinite
+        ));
 
         String colorText = color == null ? "default(from material)" : "#" + String.format(Locale.ROOT, "%06X", color);
         return OperationResult.success(
                 "Updated fluid slot " + slotNumber(slot) + " -> `" + fluidStillIdString(slot) + "`\n"
                         + "name: " + finalName + "\n"
                         + "material_fluid: " + materialFluidId + "\n"
+                        + "tick_rate: " + tickRate + "\n"
+                        + "flow_speed: " + flowSpeed + "\n"
+                        + "level_decrease_per_block: " + levelDecrease + "\n"
+                        + "blast_resistance: " + blastResistance + "\n"
+                        + "infinite: " + infinite + "\n"
                         + "color: " + colorText + "\n"
                         + "bucket item: `" + fluidBucketIdString(slot) + "`"
         );
@@ -508,6 +806,94 @@ public final class DynamicContentRegistry {
         return isSlotInRange(slot) && ITEM_STATES.get(slot).active() && ITEM_STATES.get(slot).throwable();
     }
 
+    public static synchronized float itemThrowSpeed(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_ITEM_THROW_SPEED;
+        }
+        ItemSlotState state = ITEM_STATES.get(slot);
+        if (!state.active()) {
+            return defaultItemState(slot).throwSpeed();
+        }
+        return state.throwSpeed();
+    }
+
+    public static synchronized float itemThrowDivergence(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_ITEM_THROW_DIVERGENCE;
+        }
+        ItemSlotState state = ITEM_STATES.get(slot);
+        if (!state.active()) {
+            return defaultItemState(slot).throwDivergence();
+        }
+        return state.throwDivergence();
+    }
+
+    public static synchronized int itemThrowCooldownTicks(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_ITEM_THROW_COOLDOWN_TICKS;
+        }
+        ItemSlotState state = ITEM_STATES.get(slot);
+        if (!state.active()) {
+            return defaultItemState(slot).throwCooldownTicks();
+        }
+        return state.throwCooldownTicks();
+    }
+
+    public static synchronized boolean itemConsumeOnThrow(int slot) {
+        if (!isSlotInRange(slot)) {
+            return true;
+        }
+        ItemSlotState state = ITEM_STATES.get(slot);
+        if (!state.active()) {
+            return defaultItemState(slot).consumeOnThrow();
+        }
+        return state.consumeOnThrow();
+    }
+
+    public static synchronized int itemMaxCount(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_ITEM_MAX_COUNT;
+        }
+        ItemSlotState state = ITEM_STATES.get(slot);
+        if (!state.active()) {
+            return defaultItemState(slot).maxCount();
+        }
+        return state.maxCount();
+    }
+
+    public static synchronized int itemUseTimeTicks(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_ITEM_USE_TIME_TICKS;
+        }
+        ItemSlotState state = ITEM_STATES.get(slot);
+        if (!state.active()) {
+            return defaultItemState(slot).useTimeTicks();
+        }
+        return state.useTimeTicks();
+    }
+
+    public static synchronized String itemUseAction(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_ITEM_USE_ACTION;
+        }
+        ItemSlotState state = ITEM_STATES.get(slot);
+        if (!state.active()) {
+            return defaultItemState(slot).useAction();
+        }
+        return state.useAction();
+    }
+
+    public static synchronized String itemGlintMode(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_ITEM_GLINT_MODE;
+        }
+        ItemSlotState state = ITEM_STATES.get(slot);
+        if (!state.active()) {
+            return defaultItemState(slot).glintMode();
+        }
+        return state.glintMode();
+    }
+
     public static synchronized boolean isItemActive(int slot) {
         return isSlotInRange(slot) && ITEM_STATES.get(slot).active();
     }
@@ -529,6 +915,50 @@ public final class DynamicContentRegistry {
             return defaultBlockState(slot).friction();
         }
         return state.friction();
+    }
+
+    public static synchronized float blockVelocityMultiplier(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_BLOCK_VELOCITY_MULTIPLIER;
+        }
+        BlockSlotState state = BLOCK_STATES.get(slot);
+        if (!state.active()) {
+            return defaultBlockState(slot).velocityMultiplier();
+        }
+        return state.velocityMultiplier();
+    }
+
+    public static synchronized float blockJumpVelocityMultiplier(int slot) {
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_BLOCK_JUMP_VELOCITY_MULTIPLIER;
+        }
+        BlockSlotState state = BLOCK_STATES.get(slot);
+        if (!state.active()) {
+            return defaultBlockState(slot).jumpVelocityMultiplier();
+        }
+        return state.jumpVelocityMultiplier();
+    }
+
+    public static synchronized float blockBlastResistance(int slot) {
+        if (!isSlotInRange(slot)) {
+            return defaultBlockBlastResistanceFromMaterial(DEFAULT_BLOCK_MATERIAL);
+        }
+        BlockSlotState state = BLOCK_STATES.get(slot);
+        if (!state.active()) {
+            return defaultBlockState(slot).blastResistance();
+        }
+        return state.blastResistance();
+    }
+
+    public static synchronized boolean blockUseMaterialSounds(int slot) {
+        if (!isSlotInRange(slot)) {
+            return true;
+        }
+        BlockSlotState state = BLOCK_STATES.get(slot);
+        if (!state.active()) {
+            return defaultBlockState(slot).useMaterialSounds();
+        }
+        return state.useMaterialSounds();
     }
 
     public static synchronized Item materialItemForSlot(int slot) {
@@ -560,22 +990,58 @@ public final class DynamicContentRegistry {
     }
 
     public static synchronized int fluidTickRate(int slot) {
-        // Dynamic fluids should keep water-like movement by default.
-        return 5;
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_FLUID_TICK_RATE;
+        }
+        FluidSlotState state = FLUID_STATES.get(slot);
+        if (!state.active()) {
+            return defaultFluidState(slot).tickRate();
+        }
+        return state.tickRate();
     }
 
     public static synchronized int fluidFlowSpeed(int slot) {
-        // Dynamic fluids should keep water-like movement by default.
-        return 4;
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_FLUID_FLOW_SPEED;
+        }
+        FluidSlotState state = FLUID_STATES.get(slot);
+        if (!state.active()) {
+            return defaultFluidState(slot).flowSpeed();
+        }
+        return state.flowSpeed();
     }
 
     public static synchronized int fluidLevelDecreasePerBlock(int slot) {
-        // Dynamic fluids should keep water-like movement by default.
-        return 1;
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_FLUID_LEVEL_DECREASE;
+        }
+        FluidSlotState state = FLUID_STATES.get(slot);
+        if (!state.active()) {
+            return defaultFluidState(slot).levelDecreasePerBlock();
+        }
+        return state.levelDecreasePerBlock();
     }
 
     public static synchronized float fluidBlastResistance(int slot) {
-        return 100.0F;
+        if (!isSlotInRange(slot)) {
+            return DEFAULT_FLUID_BLAST_RESISTANCE;
+        }
+        FluidSlotState state = FLUID_STATES.get(slot);
+        if (!state.active()) {
+            return defaultFluidState(slot).blastResistance();
+        }
+        return state.blastResistance();
+    }
+
+    public static synchronized boolean fluidInfinite(int slot) {
+        if (!isSlotInRange(slot)) {
+            return true;
+        }
+        FluidSlotState state = FLUID_STATES.get(slot);
+        if (!state.active()) {
+            return defaultFluidState(slot).infinite();
+        }
+        return state.infinite();
     }
 
     public static synchronized DynamicFluidBlock fluidBlock(int slot) {
@@ -819,6 +1285,14 @@ public final class DynamicContentRegistry {
                     .append(" name=\"").append(state.displayName()).append("\"")
                     .append(" material=").append(state.materialItemId())
                     .append(" throwable=").append(state.throwable())
+                    .append(" throw_speed=").append(state.throwSpeed())
+                    .append(" throw_inaccuracy=").append(state.throwDivergence())
+                    .append(" throw_cooldown_ticks=").append(state.throwCooldownTicks())
+                    .append(" consume_on_throw=").append(state.consumeOnThrow())
+                    .append(" max_count=").append(state.maxCount())
+                    .append(" use_action=").append(state.useAction())
+                    .append(" use_time_ticks=").append(state.useTimeTicks())
+                    .append(" glint_mode=").append(state.glintMode())
                     .append("\n");
         }
         if (!any) {
@@ -839,6 +1313,10 @@ public final class DynamicContentRegistry {
                     .append(" name=\"").append(state.displayName()).append("\"")
                     .append(" material=").append(state.materialBlockId())
                     .append(" friction=").append(state.friction())
+                    .append(" velocity_multiplier=").append(state.velocityMultiplier())
+                    .append(" jump_velocity_multiplier=").append(state.jumpVelocityMultiplier())
+                    .append(" blast_resistance=").append(state.blastResistance())
+                    .append(" use_material_sounds=").append(state.useMaterialSounds())
                     .append("\n");
         }
         if (!any) {
@@ -859,6 +1337,11 @@ public final class DynamicContentRegistry {
                     .append(" bucket=`").append(fluidBucketIdString(slot)).append("`")
                     .append(" name=\"").append(state.displayName()).append("\"")
                     .append(" material=").append(state.materialFluidId())
+                    .append(" tick_rate=").append(state.tickRate())
+                    .append(" flow_speed=").append(state.flowSpeed())
+                    .append(" level_decrease_per_block=").append(state.levelDecreasePerBlock())
+                    .append(" blast_resistance=").append(state.blastResistance())
+                    .append(" infinite=").append(state.infinite())
                     .append(" color=");
             if (state.customColorRgb() == null) {
                 out.append("default");
@@ -882,6 +1365,14 @@ public final class DynamicContentRegistry {
             entry.addProperty("name", state.displayName());
             entry.addProperty("material_item", state.materialItemId());
             entry.addProperty("throwable", state.throwable());
+            entry.addProperty("throw_speed", state.throwSpeed());
+            entry.addProperty("throw_inaccuracy", state.throwDivergence());
+            entry.addProperty("throw_cooldown_ticks", state.throwCooldownTicks());
+            entry.addProperty("consume_on_throw", state.consumeOnThrow());
+            entry.addProperty("max_count", state.maxCount());
+            entry.addProperty("use_action", state.useAction());
+            entry.addProperty("use_time_ticks", state.useTimeTicks());
+            entry.addProperty("glint_mode", state.glintMode());
             array.add(entry);
         }
         return array;
@@ -897,6 +1388,10 @@ public final class DynamicContentRegistry {
             entry.addProperty("name", state.displayName());
             entry.addProperty("material_block", state.materialBlockId());
             entry.addProperty("friction", state.friction());
+            entry.addProperty("velocity_multiplier", state.velocityMultiplier());
+            entry.addProperty("jump_velocity_multiplier", state.jumpVelocityMultiplier());
+            entry.addProperty("blast_resistance", state.blastResistance());
+            entry.addProperty("use_material_sounds", state.useMaterialSounds());
             array.add(entry);
         }
         return array;
@@ -911,6 +1406,11 @@ public final class DynamicContentRegistry {
             entry.addProperty("active", state.active());
             entry.addProperty("name", state.displayName());
             entry.addProperty("material_fluid", state.materialFluidId());
+            entry.addProperty("tick_rate", state.tickRate());
+            entry.addProperty("flow_speed", state.flowSpeed());
+            entry.addProperty("level_decrease_per_block", state.levelDecreasePerBlock());
+            entry.addProperty("blast_resistance", state.blastResistance());
+            entry.addProperty("infinite", state.infinite());
             if (state.customColorRgb() != null) {
                 entry.addProperty("color", "#" + String.format(Locale.ROOT, "%06X", state.customColorRgb()));
             }
@@ -939,7 +1439,34 @@ public final class DynamicContentRegistry {
                 material = DEFAULT_ITEM_MATERIAL;
             }
             boolean throwable = readBoolean(entry, "throwable", false);
-            ITEM_STATES.set(slot, new ItemSlotState(active, name, material, throwable));
+            float throwSpeed = clampItemThrowSpeed(readFloat(entry, "throw_speed", DEFAULT_ITEM_THROW_SPEED));
+            float throwDivergence = clampItemThrowDivergence(readFloat(entry, "throw_inaccuracy", DEFAULT_ITEM_THROW_DIVERGENCE));
+            int throwCooldownTicks = clampItemThrowCooldownTicks(readInt(entry, "throw_cooldown_ticks", DEFAULT_ITEM_THROW_COOLDOWN_TICKS));
+            boolean consumeOnThrow = readBoolean(entry, "consume_on_throw", true);
+            int maxCount = clampItemMaxCount(readInt(entry, "max_count", DEFAULT_ITEM_MAX_COUNT));
+            String useAction = parseItemUseAction(readString(entry, "use_action", DEFAULT_ITEM_USE_ACTION), DEFAULT_ITEM_USE_ACTION);
+            if (useAction == null) {
+                useAction = DEFAULT_ITEM_USE_ACTION;
+            }
+            int useTimeTicks = clampItemUseTimeTicks(readInt(entry, "use_time_ticks", DEFAULT_ITEM_USE_TIME_TICKS));
+            String glintMode = parseItemGlintMode(readString(entry, "glint_mode", DEFAULT_ITEM_GLINT_MODE), DEFAULT_ITEM_GLINT_MODE);
+            if (glintMode == null) {
+                glintMode = DEFAULT_ITEM_GLINT_MODE;
+            }
+            ITEM_STATES.set(slot, new ItemSlotState(
+                    active,
+                    name,
+                    material,
+                    throwable,
+                    throwSpeed,
+                    throwDivergence,
+                    throwCooldownTicks,
+                    consumeOnThrow,
+                    maxCount,
+                    useAction,
+                    useTimeTicks,
+                    glintMode
+            ));
         }
     }
 
@@ -963,7 +1490,20 @@ public final class DynamicContentRegistry {
                 material = DEFAULT_BLOCK_MATERIAL;
             }
             float friction = clampFriction(readFloat(entry, "friction", defaultFrictionFromMaterial(material)));
-            BLOCK_STATES.set(slot, new BlockSlotState(active, name, material, friction));
+            float velocityMultiplier = clampVelocityMultiplier(readFloat(entry, "velocity_multiplier", DEFAULT_BLOCK_VELOCITY_MULTIPLIER));
+            float jumpVelocityMultiplier = clampJumpVelocityMultiplier(readFloat(entry, "jump_velocity_multiplier", DEFAULT_BLOCK_JUMP_VELOCITY_MULTIPLIER));
+            float blastResistance = clampBlastResistance(readFloat(entry, "blast_resistance", defaultBlockBlastResistanceFromMaterial(material)));
+            boolean useMaterialSounds = readBoolean(entry, "use_material_sounds", true);
+            BLOCK_STATES.set(slot, new BlockSlotState(
+                    active,
+                    name,
+                    material,
+                    friction,
+                    velocityMultiplier,
+                    jumpVelocityMultiplier,
+                    blastResistance,
+                    useMaterialSounds
+            ));
         }
     }
 
@@ -993,7 +1533,22 @@ public final class DynamicContentRegistry {
                     color = parsed;
                 }
             }
-            FLUID_STATES.set(slot, new FluidSlotState(active, name, material, color));
+            int tickRate = clampFluidTickRate(readInt(entry, "tick_rate", DEFAULT_FLUID_TICK_RATE));
+            int flowSpeed = clampFluidFlowSpeed(readInt(entry, "flow_speed", DEFAULT_FLUID_FLOW_SPEED));
+            int levelDecrease = clampFluidLevelDecrease(readInt(entry, "level_decrease_per_block", DEFAULT_FLUID_LEVEL_DECREASE));
+            float blastResistance = clampBlastResistance(readFloat(entry, "blast_resistance", DEFAULT_FLUID_BLAST_RESISTANCE));
+            boolean infinite = readBoolean(entry, "infinite", true);
+            FLUID_STATES.set(slot, new FluidSlotState(
+                    active,
+                    name,
+                    material,
+                    color,
+                    tickRate,
+                    flowSpeed,
+                    levelDecrease,
+                    blastResistance,
+                    infinite
+            ));
         }
     }
 
@@ -1037,6 +1592,17 @@ public final class DynamicContentRegistry {
         }
         try {
             return entry.get(key).getAsFloat();
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private static int readInt(JsonObject entry, String key, int fallback) {
+        if (entry == null || key == null || key.isBlank() || !entry.has(key)) {
+            return fallback;
+        }
+        try {
+            return entry.get(key).getAsInt();
         } catch (Exception ignored) {
             return fallback;
         }
@@ -1129,9 +1695,95 @@ public final class DynamicContentRegistry {
         }
     }
 
+    private static String parseItemUseAction(String input, String fallback) {
+        String raw = input == null || input.isBlank() ? fallback : input.trim().toLowerCase(Locale.ROOT);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_ITEM_USE_ACTION;
+        }
+        return switch (raw) {
+            case "material", "default", "copy" -> "material";
+            case "none", "eat", "drink", "bow", "spear", "crossbow", "spyglass", "toot_horn", "brush", "block" -> raw;
+            default -> null;
+        };
+    }
+
+    private static String parseItemGlintMode(String input, String fallback) {
+        String raw = input == null || input.isBlank() ? fallback : input.trim().toLowerCase(Locale.ROOT);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_ITEM_GLINT_MODE;
+        }
+        return switch (raw) {
+            case "material", "default", "copy" -> "material";
+            case "true", "on", "yes", "forced", "force_true" -> "true";
+            case "false", "off", "no", "force_false" -> "false";
+            default -> null;
+        };
+    }
+
+    private static float clampItemThrowSpeed(float value) {
+        if (Float.isNaN(value)) {
+            return DEFAULT_ITEM_THROW_SPEED;
+        }
+        if (value < 0.1F) {
+            return 0.1F;
+        }
+        if (value > 4.0F) {
+            return 4.0F;
+        }
+        return value;
+    }
+
+    private static float clampItemThrowDivergence(float value) {
+        if (Float.isNaN(value)) {
+            return DEFAULT_ITEM_THROW_DIVERGENCE;
+        }
+        if (value < 0.0F) {
+            return 0.0F;
+        }
+        if (value > 5.0F) {
+            return 5.0F;
+        }
+        return value;
+    }
+
+    private static int clampItemThrowCooldownTicks(int value) {
+        if (value < 0) {
+            return 0;
+        }
+        if (value > 1200) {
+            return 1200;
+        }
+        return value;
+    }
+
+    private static int clampItemMaxCount(int value) {
+        if (value <= 0) {
+            return 0;
+        }
+        if (value > 99) {
+            return 99;
+        }
+        return value;
+    }
+
+    private static int clampItemUseTimeTicks(int value) {
+        if (value <= 0) {
+            return 0;
+        }
+        if (value > 72000) {
+            return 72000;
+        }
+        return value;
+    }
+
     private static float defaultFrictionFromMaterial(String materialBlockId) {
         Block block = resolveBlock(materialBlockId, Blocks.STONE);
         return block.getSlipperiness();
+    }
+
+    private static float defaultBlockBlastResistanceFromMaterial(String materialBlockId) {
+        Block block = resolveBlock(materialBlockId, Blocks.STONE);
+        return block.getBlastResistance();
     }
 
     private static float clampFriction(float value) {
@@ -1143,6 +1795,75 @@ public final class DynamicContentRegistry {
         }
         if (value > 2.0F) {
             return 2.0F;
+        }
+        return value;
+    }
+
+    private static float clampVelocityMultiplier(float value) {
+        if (Float.isNaN(value)) {
+            return DEFAULT_BLOCK_VELOCITY_MULTIPLIER;
+        }
+        if (value < 0.0F) {
+            return 0.0F;
+        }
+        if (value > 10.0F) {
+            return 10.0F;
+        }
+        return value;
+    }
+
+    private static float clampJumpVelocityMultiplier(float value) {
+        if (Float.isNaN(value)) {
+            return DEFAULT_BLOCK_JUMP_VELOCITY_MULTIPLIER;
+        }
+        if (value < 0.0F) {
+            return 0.0F;
+        }
+        if (value > 10.0F) {
+            return 10.0F;
+        }
+        return value;
+    }
+
+    private static float clampBlastResistance(float value) {
+        if (Float.isNaN(value)) {
+            return DEFAULT_FLUID_BLAST_RESISTANCE;
+        }
+        if (value < 0.0F) {
+            return 0.0F;
+        }
+        if (value > 1200.0F) {
+            return 1200.0F;
+        }
+        return value;
+    }
+
+    private static int clampFluidTickRate(int value) {
+        if (value < 1) {
+            return 1;
+        }
+        if (value > 200) {
+            return 200;
+        }
+        return value;
+    }
+
+    private static int clampFluidFlowSpeed(int value) {
+        if (value < 1) {
+            return 1;
+        }
+        if (value > 16) {
+            return 16;
+        }
+        return value;
+    }
+
+    private static int clampFluidLevelDecrease(int value) {
+        if (value < 1) {
+            return 1;
+        }
+        if (value > 8) {
+            return 8;
         }
         return value;
     }
@@ -1214,15 +1935,47 @@ public final class DynamicContentRegistry {
     }
 
     private static ItemSlotState defaultItemState(int slot) {
-        return new ItemSlotState(false, "Dynamic Item " + slotLabel(slot), DEFAULT_ITEM_MATERIAL, false);
+        return new ItemSlotState(
+                false,
+                "Dynamic Item " + slotLabel(slot),
+                DEFAULT_ITEM_MATERIAL,
+                false,
+                DEFAULT_ITEM_THROW_SPEED,
+                DEFAULT_ITEM_THROW_DIVERGENCE,
+                DEFAULT_ITEM_THROW_COOLDOWN_TICKS,
+                true,
+                DEFAULT_ITEM_MAX_COUNT,
+                DEFAULT_ITEM_USE_ACTION,
+                DEFAULT_ITEM_USE_TIME_TICKS,
+                DEFAULT_ITEM_GLINT_MODE
+        );
     }
 
     private static BlockSlotState defaultBlockState(int slot) {
-        return new BlockSlotState(false, "Dynamic Block " + slotLabel(slot), DEFAULT_BLOCK_MATERIAL, defaultFrictionFromMaterial(DEFAULT_BLOCK_MATERIAL));
+        return new BlockSlotState(
+                false,
+                "Dynamic Block " + slotLabel(slot),
+                DEFAULT_BLOCK_MATERIAL,
+                defaultFrictionFromMaterial(DEFAULT_BLOCK_MATERIAL),
+                DEFAULT_BLOCK_VELOCITY_MULTIPLIER,
+                DEFAULT_BLOCK_JUMP_VELOCITY_MULTIPLIER,
+                defaultBlockBlastResistanceFromMaterial(DEFAULT_BLOCK_MATERIAL),
+                true
+        );
     }
 
     private static FluidSlotState defaultFluidState(int slot) {
-        return new FluidSlotState(false, "Dynamic Fluid " + slotLabel(slot), DEFAULT_FLUID_MATERIAL, null);
+        return new FluidSlotState(
+                false,
+                "Dynamic Fluid " + slotLabel(slot),
+                DEFAULT_FLUID_MATERIAL,
+                null,
+                DEFAULT_FLUID_TICK_RATE,
+                DEFAULT_FLUID_FLOW_SPEED,
+                DEFAULT_FLUID_LEVEL_DECREASE,
+                DEFAULT_FLUID_BLAST_RESISTANCE,
+                true
+        );
     }
 
     public record OperationResult(boolean success, String output) {
@@ -1239,7 +1992,15 @@ public final class DynamicContentRegistry {
             boolean active,
             String displayName,
             String materialItemId,
-            boolean throwable
+            boolean throwable,
+            float throwSpeed,
+            float throwDivergence,
+            int throwCooldownTicks,
+            boolean consumeOnThrow,
+            int maxCount,
+            String useAction,
+            int useTimeTicks,
+            String glintMode
     ) {
     }
 
@@ -1247,7 +2008,11 @@ public final class DynamicContentRegistry {
             boolean active,
             String displayName,
             String materialBlockId,
-            float friction
+            float friction,
+            float velocityMultiplier,
+            float jumpVelocityMultiplier,
+            float blastResistance,
+            boolean useMaterialSounds
     ) {
     }
 
@@ -1255,7 +2020,12 @@ public final class DynamicContentRegistry {
             boolean active,
             String displayName,
             String materialFluidId,
-            Integer customColorRgb
+            Integer customColorRgb,
+            int tickRate,
+            int flowSpeed,
+            int levelDecreasePerBlock,
+            float blastResistance,
+            boolean infinite
     ) {
     }
 }

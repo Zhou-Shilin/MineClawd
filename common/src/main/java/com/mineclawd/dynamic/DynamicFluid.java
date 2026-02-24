@@ -53,7 +53,7 @@ public abstract class DynamicFluid extends FlowableFluid {
 
     @Override
     protected boolean isInfinite(World world) {
-        return true;
+        return DynamicContentRegistry.fluidInfinite(slot);
     }
 
     @Override

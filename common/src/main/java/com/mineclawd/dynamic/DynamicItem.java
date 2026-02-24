@@ -36,11 +36,22 @@ public class DynamicItem extends Item {
             if (!world.isClient) {
                 SnowballEntity projectile = new SnowballEntity(world, user);
                 projectile.setItem(stack.copyWithCount(1));
-                projectile.setVelocity(user, user.getPitch(), user.getYaw(), 0.0F, 1.5F, 1.0F);
+                projectile.setVelocity(
+                        user,
+                        user.getPitch(),
+                        user.getYaw(),
+                        0.0F,
+                        DynamicContentRegistry.itemThrowSpeed(slot),
+                        DynamicContentRegistry.itemThrowDivergence(slot)
+                );
                 world.spawnEntity(projectile);
             }
             user.incrementStat(Stats.USED.getOrCreateStat(this));
-            if (!user.getAbilities().creativeMode) {
+            int cooldownTicks = DynamicContentRegistry.itemThrowCooldownTicks(slot);
+            if (cooldownTicks > 0) {
+                user.getItemCooldownManager().set(this, cooldownTicks);
+            }
+            if (!user.getAbilities().creativeMode && DynamicContentRegistry.itemConsumeOnThrow(slot)) {
                 stack.decrement(1);
             }
             return TypedActionResult.success(stack, world.isClient());
@@ -64,6 +75,10 @@ public class DynamicItem extends Item {
 
     @Override
     public UseAction getUseAction(ItemStack stack) {
+        UseAction configured = configuredUseAction(DynamicContentRegistry.itemUseAction(slot));
+        if (configured != null) {
+            return configured;
+        }
         Item material = DynamicContentRegistry.materialItemForSlot(slot);
         if (material != null && material != this) {
             return material.getUseAction(stack);
@@ -73,6 +88,10 @@ public class DynamicItem extends Item {
 
     @Override
     public int getMaxUseTime(ItemStack stack) {
+        int configuredUseTime = DynamicContentRegistry.itemUseTimeTicks(slot);
+        if (configuredUseTime > 0) {
+            return configuredUseTime;
+        }
         Item material = DynamicContentRegistry.materialItemForSlot(slot);
         if (material != null && material != this) {
             return material.getMaxUseTime(stack);
@@ -82,10 +101,40 @@ public class DynamicItem extends Item {
 
     @Override
     public boolean hasGlint(ItemStack stack) {
+        String glintMode = DynamicContentRegistry.itemGlintMode(slot);
+        if ("true".equals(glintMode)) {
+            return true;
+        }
+        if ("false".equals(glintMode)) {
+            return false;
+        }
         Item material = DynamicContentRegistry.materialItemForSlot(slot);
         if (material != null && material != this) {
             return material.hasGlint(stack);
         }
         return super.hasGlint(stack);
+    }
+
+    // NOTE: getMaxCount() is final in 1.20.1 and cannot be overridden.
+    // max_count is kept in DynamicContentRegistry for serialization/forward-compat,
+    // but runtime override is only possible on 1.21.1+.
+
+    private static UseAction configuredUseAction(String mode) {
+        if (mode == null || mode.isBlank() || "material".equals(mode)) {
+            return null;
+        }
+        return switch (mode) {
+            case "none" -> UseAction.NONE;
+            case "eat" -> UseAction.EAT;
+            case "drink" -> UseAction.DRINK;
+            case "bow" -> UseAction.BOW;
+            case "spear" -> UseAction.SPEAR;
+            case "crossbow" -> UseAction.CROSSBOW;
+            case "spyglass" -> UseAction.SPYGLASS;
+            case "toot_horn" -> UseAction.TOOT_HORN;
+            case "brush" -> UseAction.BRUSH;
+            case "block" -> UseAction.BLOCK;
+            default -> null;
+        };
     }
 }

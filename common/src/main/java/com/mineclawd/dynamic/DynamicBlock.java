@@ -24,10 +24,27 @@ public class DynamicBlock extends Block {
     }
 
     @Override
+    public float getVelocityMultiplier() {
+        return DynamicContentRegistry.blockVelocityMultiplier(slot);
+    }
+
+    @Override
+    public float getJumpVelocityMultiplier() {
+        return DynamicContentRegistry.blockJumpVelocityMultiplier(slot);
+    }
+
+    @Override
+    public float getBlastResistance() {
+        return DynamicContentRegistry.blockBlastResistance(slot);
+    }
+
+    @Override
     public BlockSoundGroup getSoundGroup(BlockState state) {
-        Block material = DynamicContentRegistry.materialBlockForSlot(slot);
-        if (material != null && material != this) {
-            return material.getSoundGroup(material.getDefaultState());
+        if (DynamicContentRegistry.blockUseMaterialSounds(slot)) {
+            Block material = DynamicContentRegistry.materialBlockForSlot(slot);
+            if (material != null && material != this) {
+                return material.getSoundGroup(material.getDefaultState());
+            }
         }
         return super.getSoundGroup(state);
     }

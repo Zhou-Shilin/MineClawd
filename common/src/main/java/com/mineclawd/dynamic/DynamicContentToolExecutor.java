@@ -12,14 +12,40 @@ public final class DynamicContentToolExecutor {
         return new ToolExecutionResult(result.success(), result.output());
     }
 
+    public static ToolExecutionResult listProperties(String type) {
+        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.listEditableProperties(type);
+        return new ToolExecutionResult(result.success(), result.output());
+    }
+
     public static ToolExecutionResult registerItem(
             ServerCommandSource source,
             Integer slot,
             String name,
             String materialItem,
-            Boolean throwable
+            Boolean throwable,
+            Double throwSpeed,
+            Double throwInaccuracy,
+            Integer throwCooldownTicks,
+            Boolean consumeOnThrow,
+            Integer maxCount,
+            String useAction,
+            Integer useTimeTicks,
+            String glintMode
     ) {
-        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.registerItem(slot, name, materialItem, throwable);
+        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.registerItem(
+                slot,
+                name,
+                materialItem,
+                throwable,
+                throwSpeed,
+                throwInaccuracy,
+                throwCooldownTicks,
+                consumeOnThrow,
+                maxCount,
+                useAction,
+                useTimeTicks,
+                glintMode
+        );
         if (result.success()) {
             persistAndSync(source);
         }
@@ -31,9 +57,22 @@ public final class DynamicContentToolExecutor {
             Integer slot,
             String name,
             String materialBlock,
-            Double friction
+            Double friction,
+            Double velocityMultiplier,
+            Double jumpVelocityMultiplier,
+            Double blastResistance,
+            Boolean useMaterialSounds
     ) {
-        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.registerBlock(slot, name, materialBlock, friction);
+        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.registerBlock(
+                slot,
+                name,
+                materialBlock,
+                friction,
+                velocityMultiplier,
+                jumpVelocityMultiplier,
+                blastResistance,
+                useMaterialSounds
+        );
         if (result.success()) {
             persistAndSync(source);
         }
@@ -45,9 +84,24 @@ public final class DynamicContentToolExecutor {
             Integer slot,
             String name,
             String materialFluid,
-            String color
+            String color,
+            Integer tickRate,
+            Integer flowSpeed,
+            Integer levelDecreasePerBlock,
+            Double blastResistance,
+            Boolean infinite
     ) {
-        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.registerFluid(slot, name, materialFluid, color);
+        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.registerFluid(
+                slot,
+                name,
+                materialFluid,
+                color,
+                tickRate,
+                flowSpeed,
+                levelDecreasePerBlock,
+                blastResistance,
+                infinite
+        );
         if (result.success()) {
             persistAndSync(source);
         }
@@ -67,9 +121,30 @@ public final class DynamicContentToolExecutor {
             Integer slot,
             String name,
             String materialItem,
-            Boolean throwable
+            Boolean throwable,
+            Double throwSpeed,
+            Double throwInaccuracy,
+            Integer throwCooldownTicks,
+            Boolean consumeOnThrow,
+            Integer maxCount,
+            String useAction,
+            Integer useTimeTicks,
+            String glintMode
     ) {
-        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.updateItem(slot, name, materialItem, throwable);
+        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.updateItem(
+                slot,
+                name,
+                materialItem,
+                throwable,
+                throwSpeed,
+                throwInaccuracy,
+                throwCooldownTicks,
+                consumeOnThrow,
+                maxCount,
+                useAction,
+                useTimeTicks,
+                glintMode
+        );
         if (result.success()) {
             persistAndSync(source);
         }
@@ -81,9 +156,22 @@ public final class DynamicContentToolExecutor {
             Integer slot,
             String name,
             String materialBlock,
-            Double friction
+            Double friction,
+            Double velocityMultiplier,
+            Double jumpVelocityMultiplier,
+            Double blastResistance,
+            Boolean useMaterialSounds
     ) {
-        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.updateBlock(slot, name, materialBlock, friction);
+        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.updateBlock(
+                slot,
+                name,
+                materialBlock,
+                friction,
+                velocityMultiplier,
+                jumpVelocityMultiplier,
+                blastResistance,
+                useMaterialSounds
+        );
         if (result.success()) {
             persistAndSync(source);
         }
@@ -95,9 +183,24 @@ public final class DynamicContentToolExecutor {
             Integer slot,
             String name,
             String materialFluid,
-            String color
+            String color,
+            Integer tickRate,
+            Integer flowSpeed,
+            Integer levelDecreasePerBlock,
+            Double blastResistance,
+            Boolean infinite
     ) {
-        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.updateFluid(slot, name, materialFluid, color);
+        DynamicContentRegistry.OperationResult result = DynamicContentRegistry.updateFluid(
+                slot,
+                name,
+                materialFluid,
+                color,
+                tickRate,
+                flowSpeed,
+                levelDecreasePerBlock,
+                blastResistance,
+                infinite
+        );
         if (result.success()) {
             persistAndSync(source);
         }
