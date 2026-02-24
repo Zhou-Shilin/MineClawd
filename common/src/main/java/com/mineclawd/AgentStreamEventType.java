@@ -4,7 +4,9 @@ public enum AgentStreamEventType {
     START(0),
     DELTA(1),
     DONE(2),
-    ERROR(3);
+    ERROR(3),
+    TOOL_STATUS(4),
+    TOOL_STATUS_CLEAR(5);
 
     private final int id;
 
