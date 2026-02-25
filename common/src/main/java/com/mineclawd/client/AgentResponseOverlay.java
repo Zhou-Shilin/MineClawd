@@ -68,7 +68,7 @@ public final class AgentResponseOverlay {
     private static final int INPUT_SEND_BUTTON_WIDTH = 40;
     private static final int INPUT_TEXT_PADDING = 4;
     private static final int INPUT_MAX_CHARS = 600;
-    private static final long THINKING_SWEEP_CYCLE_MS = 1200L;
+    private static final long THINKING_DOTS_FRAME_MS = 350L;
     private static final long TOOL_STATUS_ANIM_STEP_MS = 95L;
     private static final long TOOL_STATUS_ANIM_PAUSE_MS = 1000L;
     private static final long TOOL_STATUS_MIN_VISIBLE_MS = 900L;
@@ -1058,6 +1058,7 @@ public final class AgentResponseOverlay {
             int contentWidth
     ) {
         rebuildWrappedLines(renderer, contentWidth, MinecraftClient.getInstance());
+        List<OrderedText> thinkingLines = buildThinkingLines(renderer, contentWidth);
         String activeToolLine = activeToolStatusText == null ? "" : renderer.trimToWidth(activeToolStatusText, Math.max(8, contentWidth));
         boolean hasActiveToolLine = !activeToolLine.isBlank();
 
@@ -1088,18 +1089,22 @@ public final class AgentResponseOverlay {
             }
             y += lineHeight;
         }
-        if (shouldShowThinkingPlaceholder()) {
-            y = renderThinkingPlaceholder(context, renderer, contentLeft, contentRight, contentTop, contentBottom, y);
+        for (OrderedText line : thinkingLines) {
+            if (y + lineHeight >= contentTop && y <= contentBottom) {
+                context.drawTextWithShadow(renderer, line, contentLeft, y, 0xFFE7EEF8);
+            }
+            y += lineHeight;
         }
 
         if (generating && !shouldShowThinkingPlaceholder() && ((System.currentTimeMillis() / CURSOR_BLINK_MS) % 2L == 0L)) {
             int cursorY = contentTop - (int) Math.round(scrollY);
             int cursorX = contentLeft;
-            List<OrderedText> renderLines = new ArrayList<>(wrappedLines.size() + (hasActiveToolLine ? 1 : 0));
+            List<OrderedText> renderLines = new ArrayList<>(wrappedLines.size() + thinkingLines.size() + (hasActiveToolLine ? 1 : 0));
             renderLines.addAll(wrappedLines);
             if (hasActiveToolLine) {
                 renderLines.add(Text.literal(activeToolLine).asOrderedText());
             }
+            renderLines.addAll(thinkingLines);
             if (!renderLines.isEmpty()) {
                 int lastLineIndex = renderLines.size() - 1;
                 OrderedText lastLine = renderLines.get(lastLineIndex);
@@ -1111,49 +1116,6 @@ public final class AgentResponseOverlay {
             }
         }
         context.disableScissor();
-    }
-
-    private static int renderThinkingPlaceholder(
-            DrawContext context,
-            TextRenderer renderer,
-            int contentLeft,
-            int contentRight,
-            int contentTop,
-            int contentBottom,
-            int y
-    ) {
-        if (renderer == null) {
-            return y;
-        }
-        int lineHeight = renderer.fontHeight + 1;
-        int boxHeight = Math.max(14, lineHeight + 4);
-        int boxTop = y;
-        int boxBottom = boxTop + boxHeight;
-        if (boxBottom >= contentTop && boxTop <= contentBottom) {
-            int boxLeft = contentLeft;
-            int boxRight = Math.max(contentLeft + 20, contentRight);
-            context.fill(boxLeft, boxTop, boxRight, boxBottom, 0xAA182534);
-            context.fill(boxLeft, boxTop, boxRight, boxTop + 1, 0xFF4F7497);
-            context.fill(boxLeft, boxBottom - 1, boxRight, boxBottom, 0xFF2A3D52);
-            context.fill(boxLeft, boxTop, boxLeft + 1, boxBottom, 0xFF4F7497);
-            context.fill(boxRight - 1, boxTop, boxRight, boxBottom, 0xFF2A3D52);
-
-            int innerLeft = boxLeft + 1;
-            int innerRight = boxRight - 1;
-            int innerWidth = Math.max(1, innerRight - innerLeft);
-            int sweepWidth = Math.max(18, innerWidth / 4);
-            long frame = Math.floorMod(System.currentTimeMillis(), THINKING_SWEEP_CYCLE_MS);
-            int travel = innerWidth + sweepWidth;
-            int sweepStart = innerLeft + (int) ((frame * travel) / THINKING_SWEEP_CYCLE_MS) - sweepWidth;
-            int sweepLeft = Math.max(innerLeft, sweepStart);
-            int sweepRight = Math.min(innerRight, sweepStart + sweepWidth);
-            if (sweepRight > sweepLeft) {
-                context.fill(sweepLeft, boxTop + 1, sweepRight, boxBottom - 1, 0x705988B7);
-            }
-
-            context.drawTextWithShadow(renderer, "MineClawd: Thinking...", boxLeft + 4, boxTop + 3, 0xFFE8F1FB);
-        }
-        return boxBottom + 1;
     }
 
     private static void renderSessionsContent(
@@ -1708,12 +1670,25 @@ public final class AgentResponseOverlay {
         return generating && awaitingFirstAssistantDelta;
     }
 
-    private static int thinkingPlaceholderHeight(TextRenderer renderer) {
-        if (!shouldShowThinkingPlaceholder()) {
-            return 0;
+    private static String animatedThinkingText() {
+        long frame = (System.currentTimeMillis() / THINKING_DOTS_FRAME_MS) % 3L;
+        return switch ((int) frame) {
+            case 0 -> "Thinking.";
+            case 1 -> "Thinking..";
+            default -> "Thinking...";
+        };
+    }
+
+    private static List<OrderedText> buildThinkingLines(TextRenderer renderer, int contentWidth) {
+        if (!shouldShowThinkingPlaceholder() || renderer == null || contentWidth <= 0) {
+            return List.of();
         }
-        int lineHeight = renderer == null ? 10 : renderer.fontHeight + 1;
-        return Math.max(14, lineHeight + 4) + 1;
+        Text line = withAgentHighlight(Text.literal(animatedThinkingText()), true);
+        List<OrderedText> lines = renderer.wrapLines(line, contentWidth);
+        if (lines == null || lines.isEmpty()) {
+            return List.of(line.asOrderedText());
+        }
+        return lines;
     }
 
     private static void drawAnimatedToolStatus(
@@ -2475,7 +2450,9 @@ public final class AgentResponseOverlay {
         if (activeToolStatusText != null && !activeToolStatusText.isBlank()) {
             textHeight += lineHeight;
         }
-        textHeight += thinkingPlaceholderHeight(renderer);
+        if (shouldShowThinkingPlaceholder()) {
+            textHeight += lineHeight;
+        }
         return Math.max(0.0, textHeight - contentHeight);
     }
 

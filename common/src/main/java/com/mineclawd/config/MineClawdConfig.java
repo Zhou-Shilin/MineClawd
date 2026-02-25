@@ -50,7 +50,6 @@ public class MineClawdConfig {
     public LlmProvider provider = LlmProvider.OPENAI;
     public String endpoint = "https://api.openai.com/v1";
     public String apiKey = "";
-    public String tavilyApiKey = "";
     public String model = "gpt-5.2";
     public String summarizeModel = "gpt-5.2";
     public String vertexEndpoint = "https://aiplatform.googleapis.com/v1";
@@ -124,7 +123,6 @@ public class MineClawdConfig {
             if (loaded.provider != null) merged.provider = loaded.provider;
             if (loaded.endpoint != null) merged.endpoint = loaded.endpoint;
             if (loaded.apiKey != null) merged.apiKey = loaded.apiKey;
-            if (loaded.tavilyApiKey != null) merged.tavilyApiKey = loaded.tavilyApiKey;
             if (loaded.model != null) merged.model = loaded.model;
             if (loaded.summarizeModel != null) merged.summarizeModel = loaded.summarizeModel;
             if (loaded.vertexEndpoint != null) merged.vertexEndpoint = loaded.vertexEndpoint;

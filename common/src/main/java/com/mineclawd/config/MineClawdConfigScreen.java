@@ -52,7 +52,6 @@ public final class MineClawdConfigScreen {
         MineClawdConfig defaults = MineClawdConfig.HANDLER.defaults();
         AtomicBoolean revealOpenAiKey = new AtomicBoolean(false);
         AtomicBoolean revealVertexKey = new AtomicBoolean(false);
-        AtomicBoolean revealTavilyKey = new AtomicBoolean(false);
         AtomicReference<RequestBroadcastTarget> broadcastTarget = new AtomicReference<>(
                 parseBroadcastTarget(initialBroadcastTarget)
         );
@@ -83,20 +82,6 @@ public final class MineClawdConfigScreen {
                 .name(Text.literal("Show API Key"))
                 .description(OptionDescription.of(Text.literal("Temporarily reveal the OpenAI API key in this screen.")))
                 .binding(false, revealOpenAiKey::get, revealOpenAiKey::set)
-                .controller(BooleanControllerBuilder::create)
-                .build();
-
-        Option<String> tavilyKeyOption = Option.<String>createBuilder()
-                .name(Text.literal("Tavily API Key"))
-                .description(OptionDescription.of(Text.literal("Optional. Enables the `search` tool when configured.")))
-                .binding(defaults.tavilyApiKey, () -> config.tavilyApiKey, value -> config.tavilyApiKey = value)
-                .customController(option -> new MaskedStringController(option, revealTavilyKey::get))
-                .build();
-
-        Option<Boolean> showTavilyKeyOption = Option.<Boolean>createBuilder()
-                .name(Text.literal("Show API Key"))
-                .description(OptionDescription.of(Text.literal("Temporarily reveal the Tavily API key in this screen.")))
-                .binding(false, revealTavilyKey::get, revealTavilyKey::set)
                 .controller(BooleanControllerBuilder::create)
                 .build();
 
@@ -232,11 +217,6 @@ public final class MineClawdConfigScreen {
                                 .option(showOpenAiKeyOption)
                                 .option(openAiModelOption)
                                 .option(openAiSummarizeModelOption)
-                                .build())
-                        .group(OptionGroup.createBuilder()
-                                .name(Text.literal("Search"))
-                                .option(tavilyKeyOption)
-                                .option(showTavilyKeyOption)
                                 .build())
                         .group(OptionGroup.createBuilder()
                                 .name(Text.literal("Google Vertex AI"))
