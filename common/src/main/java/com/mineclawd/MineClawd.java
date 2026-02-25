@@ -37,6 +37,7 @@ import com.mineclawd.session.SessionManager;
 import com.mineclawd.session.SessionManager.SessionData;
 import com.mineclawd.session.SessionManager.SessionSummary;
 import com.mineclawd.session.SessionOverlayPayload;
+import com.mineclawd.web.SearchToolExecutor;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.suggestion.Suggestions;
@@ -120,6 +121,7 @@ public class MineClawd {
     private static final String TOOL_APPLY_INSTANT_SERVER_SCRIPT = "apply-instant-server-script";
     private static final String TOOL_ASK_USER = "ask-user-question";
     private static final String TOOL_EXECUTE_COMMAND = "execute-command";
+    private static final String TOOL_SEARCH = "search";
     private static final String TOOL_LIST_COMMANDS = "list_commands";
     private static final String TOOL_FETCH_MODRINTH = "fetch_modrinth";
     private static final String TOOL_FETCH_URL = "fetch_url";
@@ -177,6 +179,7 @@ public class MineClawd {
             "provider",
             "endpoint",
             "api-key",
+            "tavily-api-key",
             "model",
             "summarize-model",
             "vertex-endpoint",
@@ -207,6 +210,7 @@ public class MineClawd {
         "- `ask-user-question`: Ask the player a targeted clarification question when details are ambiguous.",
         "  Use this before making risky assumptions, especially if multiple valid implementations exist.",
         "  Provide a concise `question` and up to 5 preset `options`.",
+        "  Do not include `Other` or `Skip` inside `options`; these are automatically added by MineClawd.",
         "- `execute-command`: Execute a normal Minecraft command and get command output.",
         "  Prefer this when vanilla commands can solve the task directly (for example: `gamerule`, `time`, `weather`, `tp`, `effect`, `give`, `clear`, `kill`, `summon`, `setblock`, `fill`, `say`, simple checks).",
         "  If command output is enough, do not use KubeJS.",
@@ -216,8 +220,12 @@ public class MineClawd {
         "- `fetch_modrinth`: Fetch the Modrinth project page content for an installed mod id.",
         "- `fetch_url`: Fetch any HTTP(S) page/content by URL. HTML responses are converted to Markdown.",
         "  Use these tools when you need command usage, config keys, APIs, or behavior details from other mods.",
+        "- `search`: Search the web via Tavily and return concise source snippets (available only when configured).",
+        "  Use this when external references are needed beyond installed-mod docs.",
         "- `apply-instant-server-script`: Execute immediate KubeJS JavaScript on the running server via /_exec_kubejs_internal.",
         "  Use this for instant actions such as checking or editing player inventory, changing nearby blocks, querying entities, and all the one-off server operations. (This is the most commonly used tool.)",
+        "When details are uncertain (for example exact KubeJS syntax, other-mod command usage, or config keys), do not guess.",
+        "First verify by using `fetch_modrinth` / `fetch_url` and `search` when available.",
         "Below are tools for managing persistent KubeJS scripts under `kubejs/server_scripts/mineclawd/`. Changes to these scripts persist across reloads and can be used for ongoing behaviors like custom commands, event listeners, and world tick logic.",
         "- `list-server-scripts`: List files under `kubejs/server_scripts/mineclawd/`.",
         "- `read-server-script`: Read a file under `kubejs/server_scripts/mineclawd/`.",
@@ -657,6 +665,7 @@ public class MineClawd {
             }
             case "endpoint" -> config.endpoint;
             case "api-key" -> maskSecret(config.apiKey);
+            case "tavily-api-key" -> maskSecret(config.tavilyApiKey);
             case "model" -> config.model;
             case "summarize-model" -> config.summarizeModel;
             case "vertex-endpoint" -> config.vertexEndpoint;
@@ -723,6 +732,7 @@ public class MineClawd {
             }
             case "endpoint" -> config.endpoint = value;
             case "api-key" -> config.apiKey = value;
+            case "tavily-api-key" -> config.tavilyApiKey = value;
             case "model" -> config.model = value;
             case "summarize-model" -> config.summarizeModel = value;
             case "vertex-endpoint" -> config.vertexEndpoint = value;
@@ -782,7 +792,7 @@ public class MineClawd {
 
         MineClawdConfig.HANDLER.save();
         String shown = switch (key) {
-            case "api-key", "vertex-api-key" -> maskSecret(value);
+            case "api-key", "vertex-api-key", "tavily-api-key" -> maskSecret(value);
             case "system-prompt" -> value.isBlank() ? "<default>" : value;
             case "dynamic-registry-mode" -> {
                 MineClawdConfig.DynamicRegistryMode mode = config.dynamicRegistryMode == null
@@ -809,6 +819,7 @@ public class MineClawd {
             case "provider" -> "provider";
             case "endpoint", "openai-endpoint" -> "endpoint";
             case "api-key", "openai-api-key", "key" -> "api-key";
+            case "tavily-api-key", "tavily-key", "search-api-key", "web-search-api-key" -> "tavily-api-key";
             case "model", "openai-model" -> "model";
             case "summarize-model", "openai-summarize-model" -> "summarize-model";
             case "vertex-endpoint" -> "vertex-endpoint";
@@ -2266,7 +2277,7 @@ public class MineClawd {
                         config.apiKey,
                         config.model,
                         history,
-                        openAiTools(runtime.dynamicRegistryEnabled()),
+                        openAiTools(runtime.dynamicRegistryEnabled(), hasConfiguredTavilyKey(config)),
                         runtime.clientStreamEnabled()
                                 ? chunk -> {
                                     if (chunk == null || chunk.isEmpty()) {
@@ -2446,7 +2457,7 @@ public class MineClawd {
                         config.vertexApiKey,
                         config.vertexModel,
                         history,
-                        vertexTools(runtime.dynamicRegistryEnabled()),
+                        vertexTools(runtime.dynamicRegistryEnabled(), hasConfiguredTavilyKey(config)),
                         runtime.clientStreamEnabled()
                                 ? chunk -> {
                                     if (chunk == null || chunk.isEmpty()) {
@@ -2786,6 +2797,7 @@ public class MineClawd {
         String ownerKey = runtime == null || runtime.ownerKey() == null || runtime.ownerKey().isBlank()
                 ? sessionOwnerKey(source)
                 : runtime.ownerKey();
+        MineClawdConfig config = MineClawdConfig.get();
         ToolExecutionResult result;
         switch (toolName) {
             case TOOL_APPLY_INSTANT_SERVER_SCRIPT:
@@ -2802,6 +2814,16 @@ public class MineClawd {
                     return "ERROR: Tool call is missing required string `command`.";
                 }
                 result = KubeJsToolExecutor.executeCommand(source, command);
+                break;
+            case TOOL_SEARCH:
+                if (!hasConfiguredTavilyKey(config)) {
+                    return "ERROR: Search tool is disabled. Configure `tavily-api-key` first.";
+                }
+                String query = readRequiredStringArg(args, "query");
+                if (query == null || query.isBlank()) {
+                    return "ERROR: Tool call is missing required string `query`.";
+                }
+                result = SearchToolExecutor.searchWeb(config.tavilyApiKey, query, readOptionalIntArg(args, "max_results"));
                 break;
             case TOOL_LIST_COMMANDS:
                 result = ModToolsExecutor.listCommands(source, readOptionalStringArg(args, "mod_id"));
@@ -3164,6 +3186,7 @@ public class MineClawd {
             return List.of();
         }
         List<String> options = new ArrayList<>();
+        Set<String> seen = ConcurrentHashMap.newKeySet();
         for (int i = 0; i < raw.size() && options.size() < MAX_QUESTION_OPTIONS; i++) {
             try {
                 String option = raw.get(i).getAsString();
@@ -3175,12 +3198,39 @@ public class MineClawd {
                     normalized = normalized.substring(0, 160).trim();
                 }
                 if (!normalized.isBlank()) {
+                    String dedupeKey = normalized.toLowerCase(Locale.ROOT);
+                    if (isBuiltInQuestionChoice(dedupeKey) || !seen.add(dedupeKey)) {
+                        continue;
+                    }
                     options.add(normalized);
                 }
             } catch (Exception ignored) {
             }
         }
         return options;
+    }
+
+    private boolean isBuiltInQuestionChoice(String choice) {
+        if (choice == null || choice.isBlank()) {
+            return false;
+        }
+        String normalized = choice.toLowerCase(Locale.ROOT)
+                .replace('_', ' ')
+                .replace('-', ' ')
+                .replace("(", " ")
+                .replace(")", " ")
+                .replace(".", " ")
+                .replace(",", " ")
+                .trim();
+        normalized = normalized.replaceAll("\\s+", " ");
+        return "other".equals(normalized)
+                || "other type custom text".equals(normalized)
+                || "custom".equals(normalized)
+                || "custom text".equals(normalized)
+                || "custom response".equals(normalized)
+                || "skip".equals(normalized)
+                || "skip question".equals(normalized)
+                || "skip this".equals(normalized);
     }
 
     private CompletableFuture<String> askUserQuestion(ServerCommandSource source, JsonObject args, AgentRuntime runtime) {
@@ -3201,7 +3251,7 @@ public class MineClawd {
         }
         List<String> options = readQuestionOptions(args);
         if (options.isEmpty()) {
-            return CompletableFuture.completedFuture("ERROR: ask-user-question requires at least one option in `options`.");
+            return CompletableFuture.completedFuture("ERROR: ask-user-question requires at least one non-built-in option in `options` (do not include Other/Skip).");
         }
 
         String questionId = buildQuestionId();
@@ -3397,11 +3447,11 @@ public class MineClawd {
         return UUID.randomUUID().toString().replace("-", "").substring(0, QUESTION_ID_LENGTH).toLowerCase(Locale.ROOT);
     }
 
-    private List<OpenAITool> openAiTools(boolean dynamicRegistryEnabled) {
+    private List<OpenAITool> openAiTools(boolean dynamicRegistryEnabled, boolean searchEnabled) {
         List<OpenAITool> tools = new ArrayList<>(List.of(
                 new OpenAITool(
                         TOOL_ASK_USER,
-                        "Ask the player a clarification question with up to five preset options. Use this when requirements are ambiguous.",
+                        "Ask the player a clarification question with up to five preset options. Do not include Other/Skip in options; those are injected automatically.",
                         questionToolParameters()
                 ),
                 new OpenAITool(
@@ -3475,6 +3525,13 @@ public class MineClawd {
                         assetRemoveToolParameters()
                 )
         ));
+        if (searchEnabled) {
+            tools.add(new OpenAITool(
+                    TOOL_SEARCH,
+                    "Search the web via Tavily and return concise snippets with URLs. Use this when external references are needed.",
+                    searchToolParameters()
+            ));
+        }
         if (dynamicRegistryEnabled) {
             tools.addAll(List.of(
                     new OpenAITool(
@@ -3527,11 +3584,11 @@ public class MineClawd {
         return List.copyOf(tools);
     }
 
-    private List<VertexAIFunction> vertexTools(boolean dynamicRegistryEnabled) {
+    private List<VertexAIFunction> vertexTools(boolean dynamicRegistryEnabled, boolean searchEnabled) {
         List<VertexAIFunction> tools = new ArrayList<>(List.of(
                 new VertexAIFunction(
                         TOOL_ASK_USER,
-                        "Ask the player a clarification question with up to five preset options. Use this when requirements are ambiguous.",
+                        "Ask the player a clarification question with up to five preset options. Do not include Other/Skip in options; those are injected automatically.",
                         questionToolParameters()
                 ),
                 new VertexAIFunction(
@@ -3605,6 +3662,13 @@ public class MineClawd {
                         assetRemoveToolParameters()
                 )
         ));
+        if (searchEnabled) {
+            tools.add(new VertexAIFunction(
+                    TOOL_SEARCH,
+                    "Search the web via Tavily and return concise snippets with URLs. Use this when external references are needed.",
+                    searchToolParameters()
+            ));
+        }
         if (dynamicRegistryEnabled) {
             tools.addAll(List.of(
                     new VertexAIFunction(
@@ -3722,6 +3786,24 @@ public class MineClawd {
         return objectToolParameters(properties, "url");
     }
 
+    private JsonObject searchToolParameters() {
+        JsonObject properties = new JsonObject();
+
+        JsonObject query = new JsonObject();
+        query.addProperty("type", "string");
+        query.addProperty("description", "Web search query.");
+        properties.add("query", query);
+
+        JsonObject maxResults = new JsonObject();
+        maxResults.addProperty("type", "integer");
+        maxResults.addProperty("description", "Optional number of search results to return (1-10, default 5).");
+        maxResults.addProperty("minimum", 1);
+        maxResults.addProperty("maximum", 10);
+        properties.add("max_results", maxResults);
+
+        return objectToolParameters(properties, "query");
+    }
+
     private JsonObject questionToolParameters() {
         JsonObject properties = new JsonObject();
 
@@ -3732,7 +3814,7 @@ public class MineClawd {
 
         JsonObject options = new JsonObject();
         options.addProperty("type", "array");
-        options.addProperty("description", "Preset options (1-5 items). A built-in Other/Skip path is always available.");
+        options.addProperty("description", "Preset options (1-5 items). Do not include Other/Skip; MineClawd appends built-in custom/skip choices automatically.");
         JsonObject item = new JsonObject();
         item.addProperty("type", "string");
         options.add("items", item);
@@ -4310,6 +4392,14 @@ public class MineClawd {
         if (!installedMods.isBlank()) {
             prompt.append("\n\nInstalled Mods:\n").append(installedMods);
         }
+        if (hasConfiguredTavilyKey(config)) {
+            prompt.append("\n\nSearch tool status:\n")
+                    .append("`search` is enabled (Tavily API key is configured). Use it whenever external facts are uncertain.");
+        } else {
+            prompt.append("\n\nSearch tool status:\n")
+                    .append("`search` is disabled because `tavily-api-key` is not configured. ")
+                    .append("If the player asks for web search, explain this and ask an operator to configure `tavily-api-key`.");
+        }
         prompt.append("\n\nPersona context:\n")
                 .append("Project and tool identity remains MineClawd even if the persona uses a different name.\n")
                 .append("Active soul: ").append(persona.name()).append("\n");
@@ -4411,6 +4501,10 @@ public class MineClawd {
             }
         }
         return out.toString().trim();
+    }
+
+    private boolean hasConfiguredTavilyKey(MineClawdConfig config) {
+        return config != null && config.tavilyApiKey != null && !config.tavilyApiKey.isBlank();
     }
 
     private String modVersion(String id) {
