@@ -186,6 +186,17 @@ public final class AgentResponseOverlay {
     private static int inputSelectionIndex = 0;
     private static int inputViewStart = 0;
 
+    // "Other" inline input state for question prompts
+    private static boolean questionOtherInputActive = false;
+    private static String questionOtherDraft = "";
+    private static int questionOtherCursorIndex = 0;
+    private static int questionOtherSelectionIndex = 0;
+    private static int questionOtherViewStart = 0;
+    private static boolean questionOtherFocused = false;
+    private static boolean questionOtherDragSelecting = false;
+    private static final RectBounds questionOtherFieldBounds = new RectBounds();
+    private static final RectBounds questionOtherSubmitBounds = new RectBounds();
+
     private AgentResponseOverlay() {
     }
 
@@ -344,6 +355,7 @@ public final class AgentResponseOverlay {
         long expiresAt = payload.expiresAtEpochMillis();
         pendingQuestionDeadlineEpochMillis = expiresAt > 0L ? expiresAt : (System.currentTimeMillis() + 60000L);
         questionButtons.clear();
+        clearQuestionOtherInput();
         visible = true;
         if (minimized) {
             restoreExpandedPanelFromOrb(client == null ? MinecraftClient.getInstance() : client);
@@ -526,11 +538,18 @@ public final class AgentResponseOverlay {
         }
 
         if (button == 0 && handleInputClick(client, mouseX, mouseY)) {
+            questionOtherFocused = false;
+            questionOtherDragSelecting = false;
+            return true;
+        }
+        if (button == 0 && handleQuestionOtherClick(client, mouseX, mouseY)) {
             return true;
         }
         if (button == 0) {
             inputFocused = false;
             inputDragSelecting = false;
+            questionOtherFocused = false;
+            questionOtherDragSelecting = false;
         }
 
         if (button == 0) {
@@ -627,6 +646,10 @@ public final class AgentResponseOverlay {
             inputDragSelecting = false;
             return true;
         }
+        if (button == 0 && questionOtherDragSelecting) {
+            questionOtherDragSelecting = false;
+            return true;
+        }
         if (minimized && button == 0 && orbPressed) {
             boolean wasDragging = orbDragging;
             orbPressed = false;
@@ -672,6 +695,11 @@ public final class AgentResponseOverlay {
 
         if (inputDragSelecting && shouldRenderInputBar()) {
             setInputCursorFromMouse(client, mouseX, true);
+            return true;
+        }
+
+        if (questionOtherDragSelecting && questionOtherFocused) {
+            setQuestionOtherCursorFromMouse(client, mouseX, true);
             return true;
         }
 
@@ -737,6 +765,10 @@ public final class AgentResponseOverlay {
         if (!isOverlayEnabled() || !isInteractive(client) || !visible || minimized) {
             return false;
         }
+        // Route to question-other input if it is focused
+        if (questionOtherFocused && pendingQuestion != null) {
+            return handleQuestionOtherChar(character);
+        }
         // When input is not focused or input bar is not shown, don't consume char events
         // so they can reach the underlying screen (e.g. chat bar)
         if (!inputFocused || !shouldRenderInputBar()) {
@@ -756,6 +788,11 @@ public final class AgentResponseOverlay {
         // Allow Escape to pass through to the underlying screen when input is not focused,
         // so the user can close the chat/pause/creative screen normally
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            if (questionOtherFocused) {
+                questionOtherFocused = false;
+                questionOtherDragSelecting = false;
+                return true;
+            }
             if (inputFocused && shouldRenderInputBar()) {
                 inputFocused = false;
                 inputDragSelecting = false;
@@ -763,6 +800,10 @@ public final class AgentResponseOverlay {
             }
             // Let Escape pass through to close the underlying screen
             return false;
+        }
+        // Route to question-other input if it is focused
+        if (questionOtherFocused && pendingQuestion != null) {
+            return handleQuestionOtherKey(client, keyCode, scanCode, modifiers);
         }
         // When the input bar is not shown or not focused, don't consume non-Escape
         // key events so they can reach the underlying screen
@@ -1026,7 +1067,12 @@ public final class AgentResponseOverlay {
 
         List<String> options = pendingQuestion.options();
         int buttonWidth = Math.max(20, width - 12);
+        int displayOptionIndex = 0;
         for (int i = 0; i < options.size(); i++) {
+            String option = options.get(i);
+            if (isBuiltInOtherQuestionOption(option)) {
+                continue;
+            }
             int buttonLeft = left + 6;
             int buttonTop = y;
             int buttonRight = buttonLeft + buttonWidth;
@@ -1036,11 +1082,15 @@ public final class AgentResponseOverlay {
                     && mouseY >= buttonTop && mouseY <= buttonBottom;
             int fill = hovered ? 0xCC3E556D : 0xB8334558;
             context.fill(buttonLeft, buttonTop, buttonRight, buttonBottom, fill);
-            String label = (i + 1) + ". " + options.get(i);
+            String label = (displayOptionIndex + 1) + ". " + option;
             context.drawTextWithShadow(renderer, renderer.trimToWidth(label, buttonWidth - 8), buttonLeft + 4, buttonTop + 5, 0xFFF4F8FF);
             questionButtons.add(QuestionButtonBounds.option(buttonLeft, buttonTop, buttonRight, buttonBottom, i));
+            displayOptionIndex++;
             y += QUESTION_BUTTON_HEIGHT + QUESTION_BUTTON_GAP;
         }
+
+        renderQuestionOtherInput(context, renderer, left + 6, y, buttonWidth, mouseX, mouseY, interactiveMode);
+        y += QUESTION_BUTTON_HEIGHT + QUESTION_BUTTON_GAP;
 
         int skipLeft = left + 6;
         int skipTop = y;
@@ -1055,6 +1105,369 @@ public final class AgentResponseOverlay {
         context.drawTextWithShadow(renderer, renderer.trimToWidth(skipLabel, buttonWidth - 8), skipLeft + 4, skipTop + 5, 0xFFFDF1F1);
         questionButtons.add(QuestionButtonBounds.skip(skipLeft, skipTop, skipRight, skipBottom));
         return blockHeight;
+    }
+
+    private static void renderQuestionOtherInput(
+            DrawContext context,
+            TextRenderer renderer,
+            int fieldLeft,
+            int fieldTop,
+            int totalWidth,
+            int mouseX,
+            int mouseY,
+            boolean interactiveMode
+    ) {
+        if (renderer == null) {
+            questionOtherFieldBounds.clear();
+            questionOtherSubmitBounds.clear();
+            return;
+        }
+        int submitWidth = 44;
+        int fieldRight = Math.max(fieldLeft + 20, fieldLeft + totalWidth - submitWidth - 4);
+        int fieldBottom = fieldTop + QUESTION_BUTTON_HEIGHT;
+
+        context.fill(fieldLeft, fieldTop, fieldRight, fieldBottom, 0xCC18212D);
+        int border = questionOtherFocused ? 0xFFA0C5E9 : 0xFF5A6B80;
+        context.fill(fieldLeft, fieldTop, fieldRight, fieldTop + 1, border);
+        context.fill(fieldLeft, fieldBottom - 1, fieldRight, fieldBottom, border);
+        context.fill(fieldLeft, fieldTop, fieldLeft + 1, fieldBottom, border);
+        context.fill(fieldRight - 1, fieldTop, fieldRight, fieldBottom, border);
+
+        int textAreaWidth = Math.max(4, fieldRight - fieldLeft - 8);
+        String draft = questionOtherDraft == null ? "" : questionOtherDraft;
+        if (draft.isBlank()) {
+            context.drawTextWithShadow(renderer, "Other...", fieldLeft + 4, fieldTop + 5, 0xFF8697AA);
+        } else {
+            questionOtherCursorIndex = MathHelper.clamp(questionOtherCursorIndex, 0, draft.length());
+            questionOtherSelectionIndex = MathHelper.clamp(questionOtherSelectionIndex, 0, draft.length());
+            questionOtherViewStart = MathHelper.clamp(questionOtherViewStart, 0, draft.length());
+            InputRenderWindow window = computeQuestionOtherRenderWindow(renderer, draft, textAreaWidth);
+            String visible = window.visible;
+            int renderBaseX = fieldLeft + 4;
+            context.enableScissor(fieldLeft + 1, fieldTop + 1, fieldRight - 1, fieldBottom - 1);
+            int selStart = Math.min(questionOtherCursorIndex, questionOtherSelectionIndex);
+            int selEnd = Math.max(questionOtherCursorIndex, questionOtherSelectionIndex);
+            if (selStart != selEnd) {
+                int visStart = Math.max(selStart, window.startIndex);
+                int visEnd = Math.min(selEnd, window.endIndex);
+                if (visEnd > visStart) {
+                    int hlLeft = renderBaseX + renderer.getWidth(draft.substring(window.startIndex, visStart));
+                    int hlRight = renderBaseX + renderer.getWidth(draft.substring(window.startIndex, visEnd));
+                    context.fill(hlLeft, fieldTop + 2, hlRight, fieldBottom - 2, 0x885988B7);
+                }
+            }
+            context.drawTextWithShadow(renderer, visible, renderBaseX, fieldTop + 5, 0xFFE8F1FB);
+            if (questionOtherFocused && ((System.currentTimeMillis() / CURSOR_BLINK_MS) % 2L == 0L)) {
+                int caretIdx = MathHelper.clamp(questionOtherCursorIndex, window.startIndex, window.endIndex);
+                int cursorX = renderBaseX + renderer.getWidth(draft.substring(window.startIndex, caretIdx));
+                context.drawTextWithShadow(renderer, "|", cursorX, fieldTop + 5, 0xFFF6FBFF);
+            }
+            context.disableScissor();
+        }
+
+        int submitLeft = fieldRight + 4;
+        int submitRight = fieldLeft + totalWidth;
+        boolean submitHovered = interactiveMode
+                && mouseX >= submitLeft && mouseX <= submitRight
+                && mouseY >= fieldTop && mouseY <= fieldBottom;
+        int submitFill = submitHovered ? 0xCC3E556D : 0xB8334558;
+        context.fill(submitLeft, fieldTop, submitRight, fieldBottom, submitFill);
+        context.fill(submitLeft, fieldTop, submitRight, fieldTop + 1, 0xFF8CA9C6);
+        context.fill(submitLeft, fieldBottom - 1, submitRight, fieldBottom, 0xFF1D2B3A);
+        context.drawTextWithShadow(renderer, renderer.trimToWidth("Other", submitRight - submitLeft - 6), submitLeft + 3, fieldTop + 5, 0xFFF2F7FF);
+
+        questionOtherFieldBounds.set(fieldLeft, fieldTop, fieldRight, fieldBottom);
+        questionOtherSubmitBounds.set(submitLeft, fieldTop, submitRight, fieldBottom);
+    }
+
+    private static InputRenderWindow computeQuestionOtherRenderWindow(TextRenderer renderer, String draft, int textAreaWidth) {
+        if (renderer == null) {
+            return new InputRenderWindow(0, 0, "");
+        }
+        String safeDraft = draft == null ? "" : draft;
+        int length = safeDraft.length();
+        if (length == 0 || textAreaWidth <= 0) {
+            questionOtherViewStart = 0;
+            return new InputRenderWindow(0, 0, "");
+        }
+        questionOtherCursorIndex = MathHelper.clamp(questionOtherCursorIndex, 0, length);
+        questionOtherSelectionIndex = MathHelper.clamp(questionOtherSelectionIndex, 0, length);
+        int start = MathHelper.clamp(questionOtherViewStart, 0, length);
+        if (questionOtherCursorIndex < start) {
+            start = questionOtherCursorIndex;
+        }
+        while (start < questionOtherCursorIndex
+                && renderer.getWidth(safeDraft.substring(start, questionOtherCursorIndex)) > textAreaWidth) {
+            start++;
+        }
+        int end = start;
+        while (end < length) {
+            int next = end + 1;
+            if (renderer.getWidth(safeDraft.substring(start, next)) > textAreaWidth) {
+                break;
+            }
+            end = next;
+        }
+        while (end < questionOtherCursorIndex && start < questionOtherCursorIndex) {
+            start++;
+            while (start < questionOtherCursorIndex
+                    && renderer.getWidth(safeDraft.substring(start, questionOtherCursorIndex)) > textAreaWidth) {
+                start++;
+            }
+            end = start;
+            while (end < length) {
+                int next = end + 1;
+                if (renderer.getWidth(safeDraft.substring(start, next)) > textAreaWidth) {
+                    break;
+                }
+                end = next;
+            }
+        }
+        questionOtherViewStart = MathHelper.clamp(start, 0, length);
+        int safeEnd = MathHelper.clamp(end, questionOtherViewStart, length);
+        return new InputRenderWindow(questionOtherViewStart, safeEnd, safeDraft.substring(questionOtherViewStart, safeEnd));
+    }
+
+    private static void clearQuestionOtherInput() {
+        questionOtherInputActive = false;
+        questionOtherDraft = "";
+        questionOtherCursorIndex = 0;
+        questionOtherSelectionIndex = 0;
+        questionOtherViewStart = 0;
+        questionOtherFocused = false;
+        questionOtherDragSelecting = false;
+        questionOtherFieldBounds.clear();
+        questionOtherSubmitBounds.clear();
+    }
+
+    private static void submitQuestionOtherInput(MinecraftClient client) {
+        if (pendingQuestion == null) {
+            clearQuestionOtherInput();
+            return;
+        }
+        String text = questionOtherDraft == null ? "" : questionOtherDraft.trim();
+        if (text.isBlank()) {
+            questionOtherFocused = true;
+            return;
+        }
+        appendQuestionAnswerToHistory(buildQuestionAnswerSummary("Custom answer: " + text));
+        QuestionResponsePayload payload = new QuestionResponsePayload(
+                pendingQuestion.questionId(),
+                QuestionResponsePayload.Type.OTHER,
+                -1,
+                text
+        );
+        submitQuestion(client, payload);
+        clearQuestionOtherInput();
+    }
+
+    private static boolean handleQuestionOtherClick(MinecraftClient client, double mouseX, double mouseY) {
+        if (pendingQuestion == null) {
+            return false;
+        }
+        if (questionOtherFieldBounds.contains(mouseX, mouseY)) {
+            questionOtherFocused = true;
+            questionOtherDragSelecting = true;
+            inputFocused = false;
+            inputDragSelecting = false;
+            setQuestionOtherCursorFromMouse(client, mouseX, false);
+            return true;
+        }
+        if (questionOtherSubmitBounds.contains(mouseX, mouseY)) {
+            submitQuestionOtherInput(client);
+            return true;
+        }
+        if (questionOtherFocused) {
+            questionOtherFocused = false;
+            questionOtherDragSelecting = false;
+        }
+        return false;
+    }
+
+    private static void setQuestionOtherCursorFromMouse(MinecraftClient client, double mouseX, boolean keepSelection) {
+        if (client == null || client.textRenderer == null) {
+            return;
+        }
+        String draft = questionOtherDraft == null ? "" : questionOtherDraft;
+        int textAreaWidth = Math.max(4, questionOtherFieldBounds.right - questionOtherFieldBounds.left - 8);
+        InputRenderWindow window = computeQuestionOtherRenderWindow(client.textRenderer, draft, textAreaWidth);
+        int relX = (int) Math.round(mouseX) - (questionOtherFieldBounds.left + 4);
+        int cursor = cursorIndexAtPixel(client.textRenderer, draft, window.startIndex, window.endIndex, relX);
+        questionOtherCursorIndex = MathHelper.clamp(cursor, 0, draft.length());
+        if (!keepSelection) {
+            questionOtherSelectionIndex = questionOtherCursorIndex;
+        }
+    }
+
+    private static boolean handleQuestionOtherKey(MinecraftClient client, int keyCode, int scanCode, int modifiers) {
+        if (!questionOtherFocused || pendingQuestion == null) {
+            return false;
+        }
+        boolean ctrl = (modifiers & GLFW.GLFW_MOD_CONTROL) != 0;
+        boolean shift = (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            questionOtherFocused = false;
+            questionOtherDragSelecting = false;
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
+            submitQuestionOtherInput(client);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_BACKSPACE) {
+            deleteQuestionOtherBackward(ctrl);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_DELETE) {
+            deleteQuestionOtherForward(ctrl);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_LEFT) {
+            moveQuestionOtherCursor(false, ctrl, shift);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_RIGHT) {
+            moveQuestionOtherCursor(true, ctrl, shift);
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_HOME) {
+            questionOtherCursorIndex = 0;
+            if (!shift) questionOtherSelectionIndex = 0;
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_END) {
+            String d = questionOtherDraft == null ? "" : questionOtherDraft;
+            questionOtherCursorIndex = d.length();
+            if (!shift) questionOtherSelectionIndex = d.length();
+            return true;
+        }
+        if (ctrl && keyCode == GLFW.GLFW_KEY_A) {
+            String d = questionOtherDraft == null ? "" : questionOtherDraft;
+            questionOtherCursorIndex = d.length();
+            questionOtherSelectionIndex = 0;
+            questionOtherViewStart = 0;
+            return true;
+        }
+        if (ctrl && keyCode == GLFW.GLFW_KEY_C) {
+            copyQuestionOtherSelection(client);
+            return true;
+        }
+        if (ctrl && keyCode == GLFW.GLFW_KEY_X) {
+            if (copyQuestionOtherSelection(client)) {
+                deleteQuestionOtherSelection();
+            }
+            return true;
+        }
+        if (ctrl && keyCode == GLFW.GLFW_KEY_V) {
+            String cb = client == null || client.keyboard == null ? "" : client.keyboard.getClipboard();
+            if (cb != null && !cb.isBlank()) {
+                appendQuestionOtherText(cb);
+            }
+            return true;
+        }
+        return true;
+    }
+
+    private static boolean handleQuestionOtherChar(char character) {
+        if (!questionOtherFocused || pendingQuestion == null) {
+            return false;
+        }
+        if (Character.isISOControl(character)) {
+            return true;
+        }
+        appendQuestionOtherText(String.valueOf(character));
+        return true;
+    }
+
+    private static void appendQuestionOtherText(String text) {
+        String insert = text == null ? "" : text.replace('\r', ' ').replace('\n', ' ');
+        if (insert.isEmpty()) {
+            return;
+        }
+        String draft = questionOtherDraft == null ? "" : questionOtherDraft;
+        int start = Math.min(questionOtherCursorIndex, questionOtherSelectionIndex);
+        int end = Math.max(questionOtherCursorIndex, questionOtherSelectionIndex);
+        start = MathHelper.clamp(start, 0, draft.length());
+        end = MathHelper.clamp(end, 0, draft.length());
+        int remaining = INPUT_MAX_CHARS - (draft.length() - (end - start));
+        if (remaining <= 0) return;
+        if (insert.length() > remaining) insert = insert.substring(0, remaining);
+        questionOtherDraft = draft.substring(0, start) + insert + draft.substring(end);
+        questionOtherCursorIndex = start + insert.length();
+        questionOtherSelectionIndex = questionOtherCursorIndex;
+        if (questionOtherViewStart > questionOtherCursorIndex) {
+            questionOtherViewStart = questionOtherCursorIndex;
+        }
+    }
+
+    private static void deleteQuestionOtherSelection() {
+        String draft = questionOtherDraft == null ? "" : questionOtherDraft;
+        int start = Math.min(questionOtherCursorIndex, questionOtherSelectionIndex);
+        int end = Math.max(questionOtherCursorIndex, questionOtherSelectionIndex);
+        start = MathHelper.clamp(start, 0, draft.length());
+        end = MathHelper.clamp(end, 0, draft.length());
+        if (start == end) return;
+        questionOtherDraft = draft.substring(0, start) + draft.substring(end);
+        questionOtherCursorIndex = start;
+        questionOtherSelectionIndex = start;
+        if (questionOtherViewStart > questionOtherCursorIndex) {
+            questionOtherViewStart = questionOtherCursorIndex;
+        }
+    }
+
+    private static void deleteQuestionOtherBackward(boolean ctrl) {
+        String draft = questionOtherDraft == null ? "" : questionOtherDraft;
+        if (questionOtherCursorIndex != questionOtherSelectionIndex) {
+            deleteQuestionOtherSelection();
+            return;
+        }
+        questionOtherCursorIndex = MathHelper.clamp(questionOtherCursorIndex, 0, draft.length());
+        if (questionOtherCursorIndex <= 0) return;
+        int from = ctrl ? previousWordBoundary(draft, questionOtherCursorIndex) : (questionOtherCursorIndex - 1);
+        questionOtherDraft = draft.substring(0, from) + draft.substring(questionOtherCursorIndex);
+        questionOtherCursorIndex = from;
+        questionOtherSelectionIndex = from;
+        if (questionOtherViewStart > questionOtherCursorIndex) {
+            questionOtherViewStart = questionOtherCursorIndex;
+        }
+    }
+
+    private static void deleteQuestionOtherForward(boolean ctrl) {
+        String draft = questionOtherDraft == null ? "" : questionOtherDraft;
+        if (questionOtherCursorIndex != questionOtherSelectionIndex) {
+            deleteQuestionOtherSelection();
+            return;
+        }
+        questionOtherCursorIndex = MathHelper.clamp(questionOtherCursorIndex, 0, draft.length());
+        if (questionOtherCursorIndex >= draft.length()) return;
+        int to = ctrl ? nextWordBoundary(draft, questionOtherCursorIndex) : (questionOtherCursorIndex + 1);
+        questionOtherDraft = draft.substring(0, questionOtherCursorIndex) + draft.substring(to);
+        questionOtherSelectionIndex = questionOtherCursorIndex;
+    }
+
+    private static void moveQuestionOtherCursor(boolean right, boolean ctrl, boolean shift) {
+        String draft = questionOtherDraft == null ? "" : questionOtherDraft;
+        questionOtherCursorIndex = MathHelper.clamp(questionOtherCursorIndex, 0, draft.length());
+        int cursor = questionOtherCursorIndex;
+        if (ctrl) {
+            cursor = right ? nextWordBoundary(draft, cursor) : previousWordBoundary(draft, cursor);
+        } else {
+            cursor = right ? Math.min(draft.length(), cursor + 1) : Math.max(0, cursor - 1);
+        }
+        questionOtherCursorIndex = cursor;
+        if (!shift) questionOtherSelectionIndex = cursor;
+    }
+
+    private static boolean copyQuestionOtherSelection(MinecraftClient client) {
+        if (client == null || client.keyboard == null) return false;
+        String draft = questionOtherDraft == null ? "" : questionOtherDraft;
+        int start = Math.min(questionOtherCursorIndex, questionOtherSelectionIndex);
+        int end = Math.max(questionOtherCursorIndex, questionOtherSelectionIndex);
+        start = MathHelper.clamp(start, 0, draft.length());
+        end = MathHelper.clamp(end, 0, draft.length());
+        if (start == end) return false;
+        client.keyboard.setClipboard(draft.substring(start, end));
+        return true;
     }
 
     private static void renderResponseContent(
@@ -1597,7 +2010,14 @@ public final class AgentResponseOverlay {
         int lineCount = renderer.wrapLines(Text.literal(pendingQuestion.question()), textWidth).size();
         lineCount = Math.max(1, Math.min(QUESTION_MAX_LINES, lineCount));
         int lineHeight = renderer.fontHeight + 1;
-        int buttonCount = Math.max(1, pendingQuestion.options().size() + 1);
+        // Count non-Other options, plus one for the inline Other input, plus one for Skip
+        int nonOtherOptions = 0;
+        for (String opt : pendingQuestion.options()) {
+            if (!isBuiltInOtherQuestionOption(opt)) {
+                nonOtherOptions++;
+            }
+        }
+        int buttonCount = Math.max(1, nonOtherOptions + 1 + 1); // options + Other input + Skip
         int buttonsHeight = buttonCount * QUESTION_BUTTON_HEIGHT + Math.max(0, buttonCount - 1) * QUESTION_BUTTON_GAP;
         return 6 + renderer.fontHeight + 3 + (lineCount * lineHeight) + 4 + buttonsHeight + 6;
     }
@@ -1686,6 +2106,7 @@ public final class AgentResponseOverlay {
         pendingQuestion = null;
         pendingQuestionDeadlineEpochMillis = 0L;
         questionButtons.clear();
+        clearQuestionOtherInput();
         if (client == null || client.getNetworkHandler() == null) {
             return;
         }
@@ -2006,6 +2427,7 @@ public final class AgentResponseOverlay {
         awaitingFirstAssistantDelta = false;
         thinkingAnimStartEpochMs = 0L;
         thinkingMinVisibleUntilEpochMs = 0L;
+        clearQuestionOtherInput();
     }
 
     private static void rebuildWrappedLines(TextRenderer renderer, int maxWidth, MinecraftClient client) {
@@ -2774,13 +3196,11 @@ public final class AgentResponseOverlay {
     }
 
     public static boolean capturesKeyboardInput(MinecraftClient client) {
-        // Only capture keyboard input when the input bar is shown and focused
-        return isOverlayEnabled()
-                && isInteractive(client)
-                && visible
-                && !minimized
-                && shouldRenderInputBar()
-                && inputFocused;
+        // Capture keyboard input when any input field in the overlay is focused
+        if (!isOverlayEnabled() || !isInteractive(client) || !visible || minimized) {
+            return false;
+        }
+        return (shouldRenderInputBar() && inputFocused) || questionOtherFocused;
     }
 
     public static boolean capturesMouseInput(MinecraftClient client, double mouseX, double mouseY) {
