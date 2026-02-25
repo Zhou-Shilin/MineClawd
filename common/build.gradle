@@ -18,26 +18,17 @@ dependencies {
     modCompileOnly "maven.modrinth:rhino:${rootProject.rhino_fabric_version}"
 
     implementation "de.themoep:minedown-adventure:${rootProject.minedown_version}"
-    include "de.themoep:minedown-adventure:${rootProject.minedown_version}"
 
     implementation "net.kyori:adventure-api:${rootProject.adventure_version}"
-    include "net.kyori:adventure-api:${rootProject.adventure_version}"
     implementation "net.kyori:adventure-key:${rootProject.adventure_version}"
-    include "net.kyori:adventure-key:${rootProject.adventure_version}"
 
     implementation "net.kyori:adventure-text-serializer-gson:${rootProject.adventure_version}"
-    include "net.kyori:adventure-text-serializer-gson:${rootProject.adventure_version}"
     implementation "net.kyori:adventure-text-serializer-commons:${rootProject.adventure_version}"
-    include "net.kyori:adventure-text-serializer-commons:${rootProject.adventure_version}"
     implementation "net.kyori:adventure-text-serializer-json:${rootProject.adventure_version}"
-    include "net.kyori:adventure-text-serializer-json:${rootProject.adventure_version}"
 
     implementation "net.kyori:examination-api:${rootProject.examination_version}"
-    include "net.kyori:examination-api:${rootProject.examination_version}"
     implementation "net.kyori:examination-string:${rootProject.examination_version}"
-    include "net.kyori:examination-string:${rootProject.examination_version}"
     implementation "net.kyori:option:${rootProject.option_version}"
-    include "net.kyori:option:${rootProject.option_version}"
 
     implementation "com.vladsch.flexmark:flexmark-html2md-converter:${rootProject.flexmark_version}"
 }
