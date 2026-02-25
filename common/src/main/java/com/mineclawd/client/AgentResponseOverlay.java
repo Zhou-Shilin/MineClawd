@@ -68,7 +68,6 @@ public final class AgentResponseOverlay {
     private static final int INPUT_SEND_BUTTON_WIDTH = 40;
     private static final int INPUT_TEXT_PADDING = 4;
     private static final int INPUT_MAX_CHARS = 600;
-    private static final long THINKING_SWEEP_CYCLE_MS = 1200L;
     private static final long TOOL_STATUS_ANIM_STEP_MS = 95L;
     private static final long TOOL_STATUS_ANIM_PAUSE_MS = 1000L;
     private static final long TOOL_STATUS_MIN_VISIBLE_MS = 900L;
@@ -140,6 +139,7 @@ public final class AgentResponseOverlay {
     private static String activeToolStatusText = "";
     private static String activeToolStatusHover = "";
     private static long toolStatusAnimStartEpochMs = 0L;
+    private static long thinkingAnimStartEpochMs = 0L;
     private static long toolStatusShownEpochMs = 0L;
     private static long toolStatusPendingClearEpochMs = 0L;
     private static boolean autoCreateSessionOnFirstSubmit = true;
@@ -247,6 +247,7 @@ public final class AgentResponseOverlay {
             activeRequestId = normalizedId;
             autoCreateSessionOnFirstSubmit = false;
             awaitingFirstAssistantDelta = true;
+            thinkingAnimStartEpochMs = 0L;
             parsedDirty = true;
             wrappedDirty = true;
             wrappedWidth = -1;
@@ -1126,34 +1127,12 @@ public final class AgentResponseOverlay {
             return y;
         }
         int lineHeight = renderer.fontHeight + 1;
-        int boxHeight = Math.max(14, lineHeight + 4);
-        int boxTop = y;
-        int boxBottom = boxTop + boxHeight;
-        if (boxBottom >= contentTop && boxTop <= contentBottom) {
-            int boxLeft = contentLeft;
-            int boxRight = Math.max(contentLeft + 20, contentRight);
-            context.fill(boxLeft, boxTop, boxRight, boxBottom, 0xAA182534);
-            context.fill(boxLeft, boxTop, boxRight, boxTop + 1, 0xFF4F7497);
-            context.fill(boxLeft, boxBottom - 1, boxRight, boxBottom, 0xFF2A3D52);
-            context.fill(boxLeft, boxTop, boxLeft + 1, boxBottom, 0xFF4F7497);
-            context.fill(boxRight - 1, boxTop, boxRight, boxBottom, 0xFF2A3D52);
-
-            int innerLeft = boxLeft + 1;
-            int innerRight = boxRight - 1;
-            int innerWidth = Math.max(1, innerRight - innerLeft);
-            int sweepWidth = Math.max(18, innerWidth / 4);
-            long frame = Math.floorMod(System.currentTimeMillis(), THINKING_SWEEP_CYCLE_MS);
-            int travel = innerWidth + sweepWidth;
-            int sweepStart = innerLeft + (int) ((frame * travel) / THINKING_SWEEP_CYCLE_MS) - sweepWidth;
-            int sweepLeft = Math.max(innerLeft, sweepStart);
-            int sweepRight = Math.min(innerRight, sweepStart + sweepWidth);
-            if (sweepRight > sweepLeft) {
-                context.fill(sweepLeft, boxTop + 1, sweepRight, boxBottom - 1, 0x705988B7);
-            }
-
-            context.drawTextWithShadow(renderer, "MineClawd: Thinking...", boxLeft + 4, boxTop + 3, 0xFFE8F1FB);
+        int top = y;
+        if (top + lineHeight >= contentTop && top <= contentBottom) {
+            String text = renderer.trimToWidth("MineClawd: Thinking...", Math.max(8, contentRight - contentLeft));
+            drawAnimatedThinkingStatus(context, renderer, text, contentLeft, top, TOOL_TEXT_COLOR);
         }
-        return boxBottom + 1;
+        return top + lineHeight;
     }
 
     private static void renderSessionsContent(
@@ -1712,8 +1691,51 @@ public final class AgentResponseOverlay {
         if (!shouldShowThinkingPlaceholder()) {
             return 0;
         }
-        int lineHeight = renderer == null ? 10 : renderer.fontHeight + 1;
-        return Math.max(14, lineHeight + 4) + 1;
+        return renderer == null ? 10 : renderer.fontHeight + 1;
+    }
+
+    private static void drawAnimatedThinkingStatus(
+            DrawContext context,
+            TextRenderer renderer,
+            String text,
+            int left,
+            int top,
+            int idleColor
+    ) {
+        if (context == null || renderer == null || text == null || text.isBlank()) {
+            return;
+        }
+        int length = text.length();
+        int window = Math.max(4, Math.min(TOOL_STATUS_WINDOW_CHARS, length));
+        int positions = Math.max(1, (length - window) + 1);
+        long cycleMoveMs = positions * TOOL_STATUS_ANIM_STEP_MS;
+        long cycleMs = cycleMoveMs + TOOL_STATUS_ANIM_PAUSE_MS;
+        if (thinkingAnimStartEpochMs <= 0L) {
+            thinkingAnimStartEpochMs = System.currentTimeMillis();
+        }
+        long elapsed = Math.max(0L, System.currentTimeMillis() - thinkingAnimStartEpochMs);
+        long phase = cycleMs <= 0L ? 0L : (elapsed % cycleMs);
+        int highlightStart = phase >= cycleMoveMs
+                ? (positions - 1)
+                : (int) Math.min(positions - 1, phase / TOOL_STATUS_ANIM_STEP_MS);
+        int highlightEnd = Math.min(length, highlightStart + window);
+
+        String prefix = text.substring(0, highlightStart);
+        String highlight = text.substring(highlightStart, highlightEnd);
+        String suffix = text.substring(highlightEnd);
+
+        int cursorX = left;
+        if (!prefix.isEmpty()) {
+            context.drawTextWithShadow(renderer, prefix, cursorX, top, idleColor);
+            cursorX += renderer.getWidth(prefix);
+        }
+        if (!highlight.isEmpty()) {
+            context.drawTextWithShadow(renderer, highlight, cursorX, top, 0xFFF2F6FF);
+            cursorX += renderer.getWidth(highlight);
+        }
+        if (!suffix.isEmpty()) {
+            context.drawTextWithShadow(renderer, suffix, cursorX, top, idleColor);
+        }
     }
 
     private static void drawAnimatedToolStatus(
@@ -1892,6 +1914,7 @@ public final class AgentResponseOverlay {
         scrollY = 0.0;
         followTail = true;
         awaitingFirstAssistantDelta = false;
+        thinkingAnimStartEpochMs = 0L;
     }
 
     private static void rebuildWrappedLines(TextRenderer renderer, int maxWidth, MinecraftClient client) {
