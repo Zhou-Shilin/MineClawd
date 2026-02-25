@@ -12,6 +12,7 @@ import net.minecraft.network.PacketByteBuf;
 import net.minecraft.text.Text;
 
 import java.util.List;
+import java.util.Locale;
 
 public final class QuestionPromptScreen extends Screen {
     private final Screen parent;
@@ -45,17 +46,23 @@ public final class QuestionPromptScreen extends Screen {
         int left = (this.width - buttonWidth) / 2;
 
         List<String> options = payload.options();
+        int displayOptionIndex = 0;
         for (int i = 0; i < options.size(); i++) {
             String option = options.get(i);
+            if (isBuiltInOtherOption(option)) {
+                continue;
+            }
             final int optionIndex = i;
-            int lineY = y + (i * 24);
-            addDrawableChild(ButtonWidget.builder(Text.literal((i + 1) + ". " + option), button ->
+            int lineY = y + (displayOptionIndex * 24);
+            int displayLabelIndex = displayOptionIndex + 1;
+            addDrawableChild(ButtonWidget.builder(Text.literal(displayLabelIndex + ". " + option), button ->
                             submitOption(optionIndex, option))
                     .dimensions(left, lineY, buttonWidth, 20)
                     .build());
+            displayOptionIndex++;
         }
 
-        int otherY = y + (options.size() * 24);
+        int otherY = y + (displayOptionIndex * 24);
         otherInput = new TextFieldWidget(this.textRenderer, left, otherY, buttonWidth - 92, 20, Text.literal("Other"));
         otherInput.setMaxLength(400);
         addDrawableChild(otherInput);
@@ -154,6 +161,27 @@ public final class QuestionPromptScreen extends Screen {
                 optionIndex,
                 optionText
         ));
+    }
+
+    private static boolean isBuiltInOtherOption(String option) {
+        if (option == null || option.isBlank()) {
+            return false;
+        }
+        String normalized = option.toLowerCase(Locale.ROOT)
+                .replace('_', ' ')
+                .replace('-', ' ')
+                .replace("(", " ")
+                .replace(")", " ")
+                .replace(".", " ")
+                .replace(",", " ")
+                .trim()
+                .replaceAll("\\s+", " ");
+        return "other".equals(normalized)
+                || "other option".equals(normalized)
+                || "custom".equals(normalized)
+                || "custom text".equals(normalized)
+                || "\u5176\u4ed6".equals(normalized)
+                || "\u5176\u5b83".equals(normalized);
     }
 
     private void submitOther() {

@@ -151,6 +151,9 @@ public class MineClawd {
     private static final int RATE_LIMIT_RETRIES = 2;
     private static final long RATE_LIMIT_BACKOFF_MS = 1500L;
     private static final int MAX_QUESTION_OPTIONS = 5;
+    private static final String BUILT_IN_QUESTION_OTHER_OPTION = "Other";
+    private static final String BUILT_IN_QUESTION_CUSTOM_INPUT_PROMPT =
+            "Please type your custom answer in chat within 60 seconds, or use `/mineclawd choose cancel`.";
     private static final long QUESTION_TIMEOUT_SECONDS = 60L;
     private static final int QUESTION_ID_LENGTH = 8;
     private static final int HISTORY_PAGE_MAX_CHARS = 900;
@@ -210,7 +213,7 @@ public class MineClawd {
         "- `ask-user-question`: Ask the player a targeted clarification question when details are ambiguous.",
         "  Use this before making risky assumptions, especially if multiple valid implementations exist.",
         "  Provide a concise `question` and up to 5 preset `options`.",
-        "  Do not include `Other` or `Skip` inside `options`; these are automatically added by MineClawd.",
+        "  Do not include `Other` or `Skip` inside `options`; MineClawd appends a built-in `Other` option and handles skip separately.",
         "- `execute-command`: Execute a normal Minecraft command and get command output.",
         "  Prefer this when vanilla commands can solve the task directly (for example: `gamerule`, `time`, `weather`, `tp`, `effect`, `give`, `clear`, `kill`, `summon`, `setblock`, `fill`, `say`, simple checks).",
         "  If command output is enough, do not use KubeJS.",
@@ -1737,7 +1740,7 @@ public class MineClawd {
 
         if ("other".equals(option)) {
             PENDING_OTHER_TEXT_INPUT.put(player.getUuid(), pending);
-            sendAgentMessage(source, "Please type your custom answer in chat within 60 seconds, or use `/mineclawd choose cancel`.");
+            sendAgentMessage(source, BUILT_IN_QUESTION_CUSTOM_INPUT_PROMPT);
             return 1;
         }
 
@@ -1747,6 +1750,11 @@ public class MineClawd {
             return 0;
         }
         String selected = pending.options().get(optionIndex);
+        if (isBuiltInQuestionOtherChoice(selected)) {
+            PENDING_OTHER_TEXT_INPUT.put(player.getUuid(), pending);
+            sendAgentMessage(source, BUILT_IN_QUESTION_CUSTOM_INPUT_PROMPT);
+            return 1;
+        }
         completePendingQuestion(
                 pending,
                 "User selected option " + (optionIndex + 1) + ": " + selected
@@ -3210,27 +3218,95 @@ public class MineClawd {
         return options;
     }
 
+    private List<String> appendBuiltInQuestionOptions(List<String> options) {
+        List<String> merged = new ArrayList<>();
+        if (options != null) {
+            for (String option : options) {
+                if (option == null || option.isBlank()) {
+                    continue;
+                }
+                if (isBuiltInQuestionOtherChoice(option)) {
+                    continue;
+                }
+                merged.add(option);
+            }
+        }
+        merged.add(BUILT_IN_QUESTION_OTHER_OPTION);
+        return merged;
+    }
+
     private boolean isBuiltInQuestionChoice(String choice) {
-        if (choice == null || choice.isBlank()) {
+        return isBuiltInQuestionOtherChoice(choice) || isBuiltInQuestionSkipChoice(choice);
+    }
+
+    private boolean isBuiltInQuestionOtherChoice(String choice) {
+        String normalized = normalizeQuestionChoice(choice);
+        if (normalized.isBlank()) {
             return false;
+        }
+        if ("other".equals(normalized)
+                || "others".equals(normalized)
+                || "custom".equals(normalized)
+                || "custom text".equals(normalized)
+                || "custom response".equals(normalized)
+                || "custom answer".equals(normalized)
+                || "other option".equals(normalized)
+                || "other options".equals(normalized)
+                || "\u5176\u4ed6".equals(normalized)
+                || "\u5176\u5b83".equals(normalized)
+                || "\u81ea\u5b9a\u4e49".equals(normalized)
+                || "\u81ea\u5b9a\u4e49\u6587\u672c".equals(normalized)
+                || "\u81ea\u5b9a\u4e49\u8f93\u5165".equals(normalized)
+                || "\u81ea\u5b9a\u4e49\u56de\u7b54".equals(normalized)
+                || "\u81ea\u5df1\u586b\u5199".equals(normalized)
+                || "\u81ea\u884c\u586b\u5199".equals(normalized)) {
+            return true;
+        }
+        if (normalized.startsWith("other ")) {
+            return normalized.contains("custom")
+                    || normalized.contains("text")
+                    || normalized.contains("input")
+                    || normalized.contains("type")
+                    || normalized.contains("specify")
+                    || normalized.contains("answer")
+                    || normalized.contains("response");
+        }
+        if (normalized.startsWith("\u5176\u4ed6") || normalized.startsWith("\u5176\u5b83")) {
+            return normalized.contains("\u586b\u5199")
+                    || normalized.contains("\u8f93\u5165")
+                    || normalized.contains("\u81ea\u5b9a\u4e49");
+        }
+        return false;
+    }
+
+    private boolean isBuiltInQuestionSkipChoice(String choice) {
+        String normalized = normalizeQuestionChoice(choice);
+        if (normalized.isBlank()) {
+            return false;
+        }
+        return "skip".equals(normalized)
+                || "skip question".equals(normalized)
+                || "skip this".equals(normalized)
+                || "skip this question".equals(normalized)
+                || "\u8df3\u8fc7".equals(normalized)
+                || "\u8df3\u8fc7\u95ee\u9898".equals(normalized);
+    }
+
+    private String normalizeQuestionChoice(String choice) {
+        if (choice == null || choice.isBlank()) {
+            return "";
         }
         String normalized = choice.toLowerCase(Locale.ROOT)
                 .replace('_', ' ')
                 .replace('-', ' ')
                 .replace("(", " ")
                 .replace(")", " ")
+                .replace("[", " ")
+                .replace("]", " ")
                 .replace(".", " ")
                 .replace(",", " ")
                 .trim();
-        normalized = normalized.replaceAll("\\s+", " ");
-        return "other".equals(normalized)
-                || "other type custom text".equals(normalized)
-                || "custom".equals(normalized)
-                || "custom text".equals(normalized)
-                || "custom response".equals(normalized)
-                || "skip".equals(normalized)
-                || "skip question".equals(normalized)
-                || "skip this".equals(normalized);
+        return normalized.replaceAll("\\s+", " ");
     }
 
     private CompletableFuture<String> askUserQuestion(ServerCommandSource source, JsonObject args, AgentRuntime runtime) {
@@ -3253,6 +3329,7 @@ public class MineClawd {
         if (options.isEmpty()) {
             return CompletableFuture.completedFuture("ERROR: ask-user-question requires at least one non-built-in option in `options` (do not include Other/Skip).");
         }
+        List<String> optionsWithBuiltIn = appendBuiltInQuestionOptions(options);
 
         String questionId = buildQuestionId();
         PendingQuestion pending = new PendingQuestion(
@@ -3260,7 +3337,7 @@ public class MineClawd {
                 player.getUuid(),
                 player.getName().getString(),
                 question,
-                options,
+                optionsWithBuiltIn,
                 System.currentTimeMillis() + (QUESTION_TIMEOUT_SECONDS * 1000L)
         );
 
@@ -3276,7 +3353,7 @@ public class MineClawd {
             QuestionPromptPayload payload = new QuestionPromptPayload(
                     questionId,
                     question,
-                    options,
+                    optionsWithBuiltIn,
                     pending.expiresAtEpochMillis()
             );
             var buffer = new PacketByteBuf(Unpooled.buffer());
@@ -3303,7 +3380,7 @@ public class MineClawd {
             });
         });
 
-        debugLog(runtime, "Waiting for user answer questionId=%s options=%d", questionId, options.size());
+        debugLog(runtime, "Waiting for user answer questionId=%s options=%d", questionId, optionsWithBuiltIn.size());
         return pending.future();
     }
 
@@ -3321,15 +3398,10 @@ public class MineClawd {
             player.sendMessage(Text.empty().append(agentPrefix()).append(optionLine), false);
         }
 
-        MutableText other = Text.literal("Other (type custom text)")
-                .setStyle(Style.EMPTY
-                        .withColor(Formatting.YELLOW)
-                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/mineclawd choose other")));
         MutableText skip = Text.literal("Skip")
                 .setStyle(Style.EMPTY
                         .withColor(Formatting.GRAY)
                         .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/mineclawd choose skip")));
-        player.sendMessage(Text.empty().append(agentPrefix()).append(other), false);
         player.sendMessage(Text.empty().append(agentPrefix()).append(skip), false);
         sendAgentMessage(source, "Waiting for your choice via `/mineclawd choose <option>`.");
     }
@@ -3387,6 +3459,12 @@ public class MineClawd {
                     return;
                 }
                 String selected = pending.options().get(index);
+                if (isBuiltInQuestionOtherChoice(selected)) {
+                    PENDING_OTHER_TEXT_INPUT.put(player.getUuid(), pending);
+                    player.sendMessage(Text.empty().append(agentPrefix())
+                            .append(renderAgentBody(null, BUILT_IN_QUESTION_CUSTOM_INPUT_PROMPT)), false);
+                    return;
+                }
                 completePendingQuestion(pending, "User selected option " + (index + 1) + ": " + selected);
                 if (notifyInChat) {
                     player.sendMessage(Text.empty().append(agentPrefix())
@@ -3451,7 +3529,7 @@ public class MineClawd {
         List<OpenAITool> tools = new ArrayList<>(List.of(
                 new OpenAITool(
                         TOOL_ASK_USER,
-                        "Ask the player a clarification question with up to five preset options. Do not include Other/Skip in options; those are injected automatically.",
+                        "Ask the player a clarification question with up to five preset options. Do not include Other/Skip in options; MineClawd injects Other and handles skip.",
                         questionToolParameters()
                 ),
                 new OpenAITool(
@@ -3588,7 +3666,7 @@ public class MineClawd {
         List<VertexAIFunction> tools = new ArrayList<>(List.of(
                 new VertexAIFunction(
                         TOOL_ASK_USER,
-                        "Ask the player a clarification question with up to five preset options. Do not include Other/Skip in options; those are injected automatically.",
+                        "Ask the player a clarification question with up to five preset options. Do not include Other/Skip in options; MineClawd injects Other and handles skip.",
                         questionToolParameters()
                 ),
                 new VertexAIFunction(
@@ -3814,7 +3892,7 @@ public class MineClawd {
 
         JsonObject options = new JsonObject();
         options.addProperty("type", "array");
-        options.addProperty("description", "Preset options (1-5 items). Do not include Other/Skip; MineClawd appends built-in custom/skip choices automatically.");
+        options.addProperty("description", "Preset options (1-5 items). Do not include Other/Skip; MineClawd appends a built-in Other option and handles skip.");
         JsonObject item = new JsonObject();
         item.addProperty("type", "string");
         options.add("items", item);
