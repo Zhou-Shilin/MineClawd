@@ -71,7 +71,7 @@ public final class AgentResponseOverlay {
     private static final long TOOL_STATUS_ANIM_STEP_MS = 95L;
     private static final long TOOL_STATUS_ANIM_PAUSE_MS = 1000L;
     private static final long TOOL_STATUS_MIN_VISIBLE_MS = 900L;
-    private static final int TOOL_STATUS_WINDOW_CHARS = 14;
+    private static final int TOOL_STATUS_WINDOW_CHARS = 4;
     private static final int TOOL_STATUS_TOOLTIP_MAX_WIDTH = 260;
     private static final int ORB_ICON_OFFSET_X = 1;
     private static final int ORB_ICON_OFFSET_Y = 1;
@@ -1129,8 +1129,30 @@ public final class AgentResponseOverlay {
         int lineHeight = renderer.fontHeight + 1;
         int top = y;
         if (top + lineHeight >= contentTop && top <= contentBottom) {
-            String text = renderer.trimToWidth("MineClawd: Thinking...", Math.max(8, contentRight - contentLeft));
-            drawAnimatedThinkingStatus(context, renderer, text, contentLeft, top, TOOL_TEXT_COLOR);
+            int maxWidth = Math.max(8, contentRight - contentLeft);
+            String prefix = "MineClawd: ";
+            String fullText = renderer.trimToWidth(prefix + "Thinking...", maxWidth);
+            if (!fullText.isBlank()) {
+                if (fullText.length() <= prefix.length()) {
+                    OrderedText orderedPrefix = Text.literal(fullText)
+                            .setStyle(net.minecraft.text.Style.EMPTY
+                                    .withColor(TextColor.fromRgb(AGENT_PREFIX_COLOR & 0xFFFFFF))
+                                    .withBold(true))
+                            .asOrderedText();
+                    context.drawTextWithShadow(renderer, orderedPrefix, contentLeft, top, AGENT_PREFIX_COLOR);
+                } else {
+                    String visiblePrefix = fullText.substring(0, prefix.length());
+                    String visibleThinking = fullText.substring(prefix.length());
+                    OrderedText orderedPrefix = Text.literal(visiblePrefix)
+                            .setStyle(net.minecraft.text.Style.EMPTY
+                                    .withColor(TextColor.fromRgb(AGENT_PREFIX_COLOR & 0xFFFFFF))
+                                    .withBold(true))
+                            .asOrderedText();
+                    context.drawTextWithShadow(renderer, orderedPrefix, contentLeft, top, AGENT_PREFIX_COLOR);
+                    int thinkingLeft = contentLeft + renderer.getWidth(orderedPrefix);
+                    drawAnimatedThinkingStatus(context, renderer, visibleThinking, thinkingLeft, top, AGENT_TEXT_COLOR);
+                }
+            }
         }
         return top + lineHeight;
     }
@@ -1705,24 +1727,51 @@ public final class AgentResponseOverlay {
         if (context == null || renderer == null || text == null || text.isBlank()) {
             return;
         }
-        int length = text.length();
-        int window = Math.max(4, Math.min(TOOL_STATUS_WINDOW_CHARS, length));
-        int positions = Math.max(1, (length - window) + 1);
-        long cycleMoveMs = positions * TOOL_STATUS_ANIM_STEP_MS;
-        long cycleMs = cycleMoveMs + TOOL_STATUS_ANIM_PAUSE_MS;
         if (thinkingAnimStartEpochMs <= 0L) {
             thinkingAnimStartEpochMs = System.currentTimeMillis();
         }
-        long elapsed = Math.max(0L, System.currentTimeMillis() - thinkingAnimStartEpochMs);
-        long phase = cycleMs <= 0L ? 0L : (elapsed % cycleMs);
-        int highlightStart = phase >= cycleMoveMs
-                ? (positions - 1)
-                : (int) Math.min(positions - 1, phase / TOOL_STATUS_ANIM_STEP_MS);
-        int highlightEnd = Math.min(length, highlightStart + window);
+        drawAnimatedStatusText(context, renderer, text, left, top, idleColor, thinkingAnimStartEpochMs);
+    }
 
-        String prefix = text.substring(0, highlightStart);
-        String highlight = text.substring(highlightStart, highlightEnd);
-        String suffix = text.substring(highlightEnd);
+    private static void drawAnimatedToolStatus(
+            DrawContext context,
+            TextRenderer renderer,
+            String text,
+            int left,
+            int top,
+            int idleColor
+    ) {
+        if (context == null || renderer == null || text == null || text.isBlank()) {
+            return;
+        }
+        if (toolStatusAnimStartEpochMs <= 0L) {
+            toolStatusAnimStartEpochMs = System.currentTimeMillis();
+        }
+        drawAnimatedStatusText(context, renderer, text, left, top, idleColor, toolStatusAnimStartEpochMs);
+    }
+
+    private static void drawAnimatedStatusText(
+            DrawContext context,
+            TextRenderer renderer,
+            String text,
+            int left,
+            int top,
+            int idleColor,
+            long animationStartEpochMs
+    ) {
+        if (context == null || renderer == null || text == null || text.isBlank()) {
+            return;
+        }
+
+        AnimatedHighlightWindow window = resolveAnimatedHighlight(text.length(), animationStartEpochMs);
+        if (!window.active()) {
+            context.drawTextWithShadow(renderer, text, left, top, idleColor);
+            return;
+        }
+
+        String prefix = text.substring(0, window.start());
+        String highlight = text.substring(window.start(), window.end());
+        String suffix = text.substring(window.end());
 
         int cursorX = left;
         if (!prefix.isEmpty()) {
@@ -1738,49 +1787,50 @@ public final class AgentResponseOverlay {
         }
     }
 
-    private static void drawAnimatedToolStatus(
-            DrawContext context,
-            TextRenderer renderer,
-            String text,
-            int left,
-            int top,
-            int idleColor
-    ) {
-        if (context == null || renderer == null || text == null || text.isBlank()) {
-            return;
+    private static AnimatedHighlightWindow resolveAnimatedHighlight(int length, long animationStartEpochMs) {
+        if (length <= 0) {
+            return AnimatedHighlightWindow.inactive();
         }
-        String value = text;
-        int length = value.length();
-        int window = Math.max(4, Math.min(TOOL_STATUS_WINDOW_CHARS, length));
-        int positions = Math.max(1, (length - window) + 1);
-        long cycleMoveMs = positions * TOOL_STATUS_ANIM_STEP_MS;
-        long cycleMs = cycleMoveMs + TOOL_STATUS_ANIM_PAUSE_MS;
-        if (toolStatusAnimStartEpochMs <= 0L) {
-            toolStatusAnimStartEpochMs = System.currentTimeMillis();
-        }
-        long elapsed = Math.max(0L, System.currentTimeMillis() - toolStatusAnimStartEpochMs);
-        long phase = cycleMs <= 0L ? 0L : (elapsed % cycleMs);
-        int highlightStart = phase >= cycleMoveMs
-                ? (positions - 1)
-                : (int) Math.min(positions - 1, phase / TOOL_STATUS_ANIM_STEP_MS);
-        int highlightEnd = Math.min(length, highlightStart + window);
 
-        String prefix = value.substring(0, highlightStart);
-        String highlight = value.substring(highlightStart, highlightEnd);
-        String suffix = value.substring(highlightEnd);
+        int maxWindow = Math.max(1, Math.min(TOOL_STATUS_WINDOW_CHARS, length));
+        int frameCount = length + maxWindow + 1;
+        long animationMs = frameCount * TOOL_STATUS_ANIM_STEP_MS;
+        long cycleMs = animationMs + TOOL_STATUS_ANIM_PAUSE_MS;
+        if (cycleMs <= 0L || TOOL_STATUS_ANIM_STEP_MS <= 0L) {
+            return AnimatedHighlightWindow.inactive();
+        }
 
-        int cursorX = left;
-        if (!prefix.isEmpty()) {
-            context.drawTextWithShadow(renderer, prefix, cursorX, top, idleColor);
-            cursorX += renderer.getWidth(prefix);
+        long start = Math.max(0L, animationStartEpochMs);
+        long elapsed = Math.max(0L, System.currentTimeMillis() - start);
+        long phase = elapsed % cycleMs;
+        if (phase >= animationMs) {
+            return AnimatedHighlightWindow.inactive();
         }
-        if (!highlight.isEmpty()) {
-            context.drawTextWithShadow(renderer, highlight, cursorX, top, 0xFFF2F6FF);
-            cursorX += renderer.getWidth(highlight);
+
+        int frame = (int) Math.min(frameCount - 1, phase / TOOL_STATUS_ANIM_STEP_MS);
+        if (frame <= 0 || frame >= frameCount - 1) {
+            return AnimatedHighlightWindow.inactive();
         }
-        if (!suffix.isEmpty()) {
-            context.drawTextWithShadow(renderer, suffix, cursorX, top, idleColor);
+
+        int highlightStart;
+        int highlightEnd;
+        if (frame <= maxWindow) {
+            highlightStart = 0;
+            highlightEnd = frame;
+        } else if (frame <= length) {
+            highlightStart = frame - maxWindow;
+            highlightEnd = Math.min(length, highlightStart + maxWindow);
+        } else {
+            int tailStep = frame - length;
+            int tailWindow = Math.max(1, maxWindow - tailStep);
+            highlightStart = Math.max(0, length - tailWindow);
+            highlightEnd = length;
         }
+
+        if (highlightEnd <= highlightStart) {
+            return AnimatedHighlightWindow.inactive();
+        }
+        return new AnimatedHighlightWindow(highlightStart, highlightEnd, true);
     }
 
     private static void renderSimpleTooltip(
@@ -3477,6 +3527,12 @@ public final class AgentResponseOverlay {
             } catch (Exception ignored) {
                 return null;
             }
+        }
+    }
+
+    private record AnimatedHighlightWindow(int start, int end, boolean active) {
+        private static AnimatedHighlightWindow inactive() {
+            return new AnimatedHighlightWindow(0, 0, false);
         }
     }
 }
