@@ -1571,7 +1571,7 @@ public final class AgentResponseOverlay {
                             .asOrderedText();
                     context.drawTextWithShadow(renderer, orderedPrefix, contentLeft, top, AGENT_PREFIX_COLOR);
                     int thinkingLeft = contentLeft + renderer.getWidth(orderedPrefix);
-                    drawAnimatedThinkingStatus(context, renderer, visibleThinking, thinkingLeft, top, AGENT_TEXT_COLOR);
+                    drawAnimatedThinkingStatus(context, renderer, visibleThinking, thinkingLeft, top, TOOL_TEXT_COLOR);
                 }
             }
         }
