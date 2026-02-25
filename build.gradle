@@ -41,7 +41,7 @@ subprojects {
     def javaRelease = Integer.parseInt(project.findProperty("java_version")?.toString() ?: "17")
 
     base {
-        archivesName = "${rootProject.archives_base_name}-${project.name}"
+        archivesName = "${rootProject.archives_base_name}-${project.name}-${rootProject.minecraft_version}"
     }
 
     version = rootProject.mod_version
