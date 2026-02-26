@@ -724,7 +724,15 @@ public final class DynamicContentRegistry {
         }
         var buf = new PacketByteBuf(Unpooled.buffer());
         buf.writeString(buildSyncPayload());
-        NetworkManager.sendToPlayer(player, MineClawdNetworking.SYNC_DYNAMIC_CONTENT, buf);
+        try {
+            NetworkManager.sendToPlayer(player, MineClawdNetworking.SYNC_DYNAMIC_CONTENT, buf);
+        } catch (Throwable throwable) {
+            MineClawd.LOGGER.warn(
+                    "[MineClawd] Failed to sync dynamic content to {}: {}",
+                    player.getName().getString(),
+                    throwable.getMessage()
+            );
+        }
     }
 
     public static void syncToAll(MinecraftServer server) {

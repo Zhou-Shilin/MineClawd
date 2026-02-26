@@ -66,6 +66,7 @@ public final class AgentResponseOverlay {
     private static final int INPUT_HEIGHT = 18;
     private static final int INPUT_GAP = 6;
     private static final int INPUT_SEND_BUTTON_WIDTH = 40;
+    private static final int INPUT_RETRY_BUTTON_WIDTH = 46;
     private static final int INPUT_TEXT_PADDING = 4;
     private static final int INPUT_MAX_CHARS = 600;
     private static final long TOOL_STATUS_ANIM_STEP_MS = 95L;
@@ -137,6 +138,7 @@ public final class AgentResponseOverlay {
 
     private static String activeRequestId = "";
     private static String activeSessionId = "";
+    private static boolean autoCreateSessionOnNextInputSubmit = true;
     private static String activeToolStatusText = "";
     private static String activeToolStatusHover = "";
     private static long toolStatusAnimStartEpochMs = 0L;
@@ -144,7 +146,6 @@ public final class AgentResponseOverlay {
     private static long thinkingMinVisibleUntilEpochMs = 0L;
     private static long toolStatusShownEpochMs = 0L;
     private static long toolStatusPendingClearEpochMs = 0L;
-    private static boolean autoCreateSessionOnFirstSubmit = true;
     private static boolean awaitingFirstAssistantDelta = false;
     private static final StringBuilder content = new StringBuilder();
     private static final List<OrderedText> wrappedLines = new ArrayList<>();
@@ -165,6 +166,7 @@ public final class AgentResponseOverlay {
     private static final List<AssetFilterButtonBounds> assetFilterButtons = new ArrayList<>();
     private static final RectBounds newSessionButton = new RectBounds();
     private static final RectBounds inputFieldBounds = new RectBounds();
+    private static final RectBounds inputRetryBounds = new RectBounds();
     private static final RectBounds inputSendBounds = new RectBounds();
     private static final RectBounds assetTeleportButton = new RectBounds();
     private static final RectBounds assetGiveButton = new RectBounds();
@@ -185,6 +187,7 @@ public final class AgentResponseOverlay {
     private static int inputCursorIndex = 0;
     private static int inputSelectionIndex = 0;
     private static int inputViewStart = 0;
+    private static String failedRetryToken = "";
 
     // "Other" inline input state for question prompts
     private static boolean questionOtherInputActive = false;
@@ -227,7 +230,8 @@ public final class AgentResponseOverlay {
         layoutInitialized = false;
         expandedPanelX = Integer.MIN_VALUE;
         expandedPanelY = Integer.MIN_VALUE;
-        autoCreateSessionOnFirstSubmit = true;
+        activeSessionId = "";
+        autoCreateSessionOnNextInputSubmit = true;
         clearToolStatusState();
     }
 
@@ -243,8 +247,10 @@ public final class AgentResponseOverlay {
             StreamStartPayload startPayload = StreamStartPayload.fromJson(text);
             String startSessionId = startPayload == null ? "" : startPayload.sessionId();
             String prompt = startPayload == null ? "" : startPayload.request();
+            clearFailedRetryState();
             clearToolStatusState();
             if (!startSessionId.isBlank()) {
+                autoCreateSessionOnNextInputSubmit = false;
                 if (!startSessionId.equals(activeSessionId)) {
                     activeSessionId = startSessionId;
                     clearResponseContent();
@@ -258,7 +264,7 @@ public final class AgentResponseOverlay {
                 content.append(markUserLines(prompt)).append("\n\n");
             }
             activeRequestId = normalizedId;
-            autoCreateSessionOnFirstSubmit = false;
+            autoCreateSessionOnNextInputSubmit = false;
             long now = System.currentTimeMillis();
             awaitingFirstAssistantDelta = true;
             thinkingAnimStartEpochMs = now;
@@ -331,9 +337,13 @@ public final class AgentResponseOverlay {
         }
 
         if (eventType == AgentStreamEventType.ERROR) {
+            StreamErrorPayload errorPayload = StreamErrorPayload.parse(text);
             awaitingFirstAssistantDelta = false;
             thinkingMinVisibleUntilEpochMs = 0L;
-            appendText(text);
+            failedRetryToken = errorPayload.retryToken();
+            if (!errorPayload.message().isBlank()) {
+                appendText(errorPayload.message());
+            }
             clearToolStatusState();
             generating = false;
             return;
@@ -574,14 +584,14 @@ public final class AgentResponseOverlay {
             if (newSessionButton.contains(mouseX, mouseY)) {
                 mode = OverlayMode.RESPONSE;
                 clearResponseContent();
-                autoCreateSessionOnFirstSubmit = false;
+                autoCreateSessionOnNextInputSubmit = false;
                 sendCommand(client, "mineclawd sessions new");
                 return true;
             }
             SessionRowBounds row = findSessionRow(mouseX, mouseY);
             if (row != null && row.sessionId != null && !row.sessionId.isBlank()) {
                 mode = OverlayMode.RESPONSE;
-                autoCreateSessionOnFirstSubmit = false;
+                autoCreateSessionOnNextInputSubmit = false;
                 sendCommand(client, "mineclawd sessions resume " + row.sessionId);
                 return true;
             }
@@ -972,6 +982,7 @@ public final class AgentResponseOverlay {
                 contentBottom -= (INPUT_HEIGHT + INPUT_GAP);
             } else {
                 inputFieldBounds.clear();
+                inputRetryBounds.clear();
                 inputSendBounds.clear();
             }
             int contentWidth = Math.max(10, contentRight - contentLeft);
@@ -1900,6 +1911,10 @@ public final class AgentResponseOverlay {
         return mode == OverlayMode.RESPONSE && !minimized;
     }
 
+    private static boolean shouldShowRetryButton() {
+        return !generating && failedRetryToken != null && !failedRetryToken.isBlank();
+    }
+
     private static void renderInputBar(
             DrawContext context,
             TextRenderer renderer,
@@ -1911,8 +1926,15 @@ public final class AgentResponseOverlay {
         int barBottom = barTop + INPUT_HEIGHT;
         int sendRight = panelX + panelWidth - CONTENT_PADDING;
         int sendLeft = sendRight - INPUT_SEND_BUTTON_WIDTH;
+        boolean showRetryButton = shouldShowRetryButton();
+        int retryRight = sendLeft - 4;
+        int retryLeft = retryRight - INPUT_RETRY_BUTTON_WIDTH;
         int fieldLeft = panelX + CONTENT_PADDING;
-        int fieldRight = Math.max(fieldLeft + 12, sendLeft - 4);
+        if (!showRetryButton || retryLeft <= fieldLeft + 14) {
+            showRetryButton = false;
+            inputRetryBounds.clear();
+        }
+        int fieldRight = Math.max(fieldLeft + 12, (showRetryButton ? retryLeft : sendLeft) - 4);
 
         context.fill(fieldLeft, barTop, fieldRight, barBottom, 0xCC18212D);
         int fieldBorder = inputFocused ? 0xFFA0C5E9 : 0xFF5A6B80;
@@ -1940,6 +1962,20 @@ public final class AgentResponseOverlay {
             context.fill(cx + stopPad, cy + stopPad, cx + iconSize - stopPad, cy + iconSize - stopPad, 0xFF5A3131);
         } else {
             context.drawTextWithShadow(renderer, "Send", sendLeft + 8, barTop + 5, 0xFFF2F7FF);
+        }
+
+        if (showRetryButton) {
+            boolean retryHovered = interactiveMode
+                    && mouseX >= retryLeft && mouseX <= retryRight
+                    && mouseY >= barTop && mouseY <= barBottom;
+            int retryFill = retryHovered ? 0xFF7A5C36 : 0xFF61472B;
+            context.fill(retryLeft, barTop, retryRight, barBottom, retryFill);
+            context.fill(retryLeft, barTop, retryRight, barTop + 1, 0xFFC8A679);
+            context.fill(retryLeft, barBottom - 1, retryRight, barBottom, 0xFF2D2114);
+            context.drawTextWithShadow(renderer, "Retry", retryLeft + 7, barTop + 5, 0xFFFFF3DF);
+            inputRetryBounds.set(retryLeft, barTop, retryRight, barBottom);
+        } else {
+            inputRetryBounds.clear();
         }
 
         int textAreaWidth = Math.max(8, fieldRight - fieldLeft - (INPUT_TEXT_PADDING * 2));
@@ -1986,6 +2022,12 @@ public final class AgentResponseOverlay {
             inputFocused = true;
             inputDragSelecting = true;
             setInputCursorFromMouse(client, mouseX, false);
+            return true;
+        }
+        if (inputRetryBounds.contains(mouseX, mouseY)) {
+            inputFocused = true;
+            inputDragSelecting = false;
+            requestRetry(client);
             return true;
         }
         if (inputSendBounds.contains(mouseX, mouseY)) {
@@ -2352,6 +2394,11 @@ public final class AgentResponseOverlay {
         toolStatusShownEpochMs = 0L;
         toolStatusPendingClearEpochMs = 0L;
         toolStatusBounds.clear();
+    }
+
+    private static void clearFailedRetryState() {
+        failedRetryToken = "";
+        inputRetryBounds.clear();
     }
 
     private static void requestToolStatusClear() {
@@ -2852,6 +2899,7 @@ public final class AgentResponseOverlay {
         assetModifyButton.clear();
         assetDeleteButton.clear();
         inputFieldBounds.clear();
+        inputRetryBounds.clear();
         inputSendBounds.clear();
         inputFocused = false;
         inputDragSelecting = false;
@@ -2866,6 +2914,7 @@ public final class AgentResponseOverlay {
         pendingQuestion = null;
         pendingQuestionDeadlineEpochMillis = 0L;
         clearResponseContent();
+        clearFailedRetryState();
     }
 
     private static boolean shouldShowAssistiveOrb(MinecraftClient client) {
@@ -3387,7 +3436,7 @@ public final class AgentResponseOverlay {
         mode = OverlayMode.RESPONSE;
         menuOpen = false;
         clearResponseContent();
-        autoCreateSessionOnFirstSubmit = false;
+        autoCreateSessionOnNextInputSubmit = false;
         sendCommand(client, "mineclawd sessions new");
         String category = categoryDisplayName(item.category());
         String name = item.name() == null || item.name().isBlank() ? item.id() : item.name();
@@ -3740,12 +3789,25 @@ public final class AgentResponseOverlay {
         }
         mode = OverlayMode.RESPONSE;
         menuOpen = false;
-        if (autoCreateSessionOnFirstSubmit && activeSessionId.isBlank()) {
+        clearFailedRetryState();
+        if (autoCreateSessionOnNextInputSubmit) {
+            autoCreateSessionOnNextInputSubmit = false;
             sendCommand(client, "mineclawd sessions new");
-            autoCreateSessionOnFirstSubmit = false;
         }
         sendCommand(client, "mclawd " + draft);
         setInputDraftText("", true);
+    }
+
+    private static void requestRetry(MinecraftClient client) {
+        if (client == null) {
+            return;
+        }
+        String token = failedRetryToken == null ? "" : failedRetryToken.trim();
+        if (token.isBlank()) {
+            return;
+        }
+        clearFailedRetryState();
+        sendCommand(client, "mineclawd retry " + token);
     }
 
     private static void requestStopGeneration(MinecraftClient client) {
@@ -3970,6 +4032,86 @@ public final class AgentResponseOverlay {
             } catch (Exception ignored) {
                 return null;
             }
+        }
+    }
+
+    private record StreamErrorPayload(String message, String retryToken) {
+        private static final String RETRY_COMMAND_PREFIX = "/mineclawd retry ";
+
+        private static StreamErrorPayload parse(String payload) {
+            if (payload == null || payload.isBlank()) {
+                return new StreamErrorPayload("", "");
+            }
+            String normalizedPayload = payload.replace("\r\n", "\n").replace('\r', '\n');
+            String[] lines = normalizedPayload.split("\n", -1);
+            String token = "";
+            StringBuilder messageBuilder = new StringBuilder();
+            for (String line : lines) {
+                String rawLine = line == null ? "" : line;
+                String trimmed = rawLine.trim();
+                String parsedToken = parseRetryToken(trimmed);
+                if (!parsedToken.isBlank()) {
+                    token = parsedToken;
+                    String lower = trimmed.toLowerCase(Locale.ROOT);
+                    if (lower.startsWith("retry token:") || lower.startsWith("retry command:") || lower.contains(RETRY_COMMAND_PREFIX)) {
+                        continue;
+                    }
+                }
+                String lower = trimmed.toLowerCase(Locale.ROOT);
+                if (lower.startsWith("adjust prompt command:")) {
+                    continue;
+                }
+                if (messageBuilder.length() > 0) {
+                    messageBuilder.append('\n');
+                }
+                messageBuilder.append(rawLine);
+            }
+            return new StreamErrorPayload(messageBuilder.toString().trim(), token);
+        }
+
+        private static String parseRetryToken(String line) {
+            if (line == null || line.isBlank()) {
+                return "";
+            }
+            String normalized = line.trim();
+            String lower = normalized.toLowerCase(Locale.ROOT);
+            if (lower.startsWith("retry token:")) {
+                int separator = normalized.indexOf(':');
+                if (separator >= 0 && separator + 1 < normalized.length()) {
+                    return normalizeRetryToken(normalized.substring(separator + 1));
+                }
+            }
+            int commandIndex = lower.indexOf(RETRY_COMMAND_PREFIX);
+            if (commandIndex >= 0) {
+                int start = commandIndex + RETRY_COMMAND_PREFIX.length();
+                if (start < normalized.length()) {
+                    return normalizeRetryToken(normalized.substring(start));
+                }
+            }
+            return "";
+        }
+
+        private static String normalizeRetryToken(String candidate) {
+            if (candidate == null) {
+                return "";
+            }
+            String token = candidate.trim();
+            while (!token.isEmpty() && (token.startsWith("`") || token.startsWith("\"") || token.startsWith("'"))) {
+                token = token.substring(1).trim();
+            }
+            int end = 0;
+            while (end < token.length()) {
+                char c = token.charAt(end);
+                if (Character.isLetterOrDigit(c) || c == '-' || c == '_') {
+                    end++;
+                    continue;
+                }
+                break;
+            }
+            if (end <= 0) {
+                return "";
+            }
+            return token.substring(0, end);
         }
     }
 

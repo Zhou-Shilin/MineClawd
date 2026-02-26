@@ -5,6 +5,9 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+
 public final class KubeJsAgentBridge {
     private KubeJsAgentBridge() {
     }
@@ -24,6 +27,18 @@ public final class KubeJsAgentBridge {
             server = player.getServer();
         }
         return MineClawd.enqueueKubeJsOneShotRequest(source, server, request);
+    }
+
+    public static String decodeBase64UrlUtf8(String encoded) {
+        if (encoded == null) {
+            return "";
+        }
+        byte[] decoded = Base64.getUrlDecoder().decode(encoded);
+        return new String(decoded, StandardCharsets.UTF_8);
+    }
+
+    public static String decodeBase64UrlUtf8Any(Object encodedLike) {
+        return decodeBase64UrlUtf8(encodedLike == null ? "" : String.valueOf(encodedLike));
     }
 
     private static ServerPlayerEntity asPlayer(Object value) {

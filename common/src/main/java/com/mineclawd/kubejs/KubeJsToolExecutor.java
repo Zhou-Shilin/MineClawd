@@ -1,7 +1,9 @@
 package com.mineclawd.kubejs;
 
+import com.mineclawd.MineClawd;
 import net.minecraft.server.command.CommandOutput;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.text.Text;
 
 import java.io.IOException;
@@ -26,6 +28,8 @@ public final class KubeJsToolExecutor {
     private static final int MAX_LIST_RESULTS = 200;
     private static final int MAX_ERROR_LINES = 120;
     private static final String KUBEJS_PREFIX = "kubejs/server_scripts/mineclawd/";
+    private static final String INTERNAL_EXEC_COMMAND = "_exec_kubejs_internal_mc";
+    private static final int COMMAND_SAMPLE_SIZE = 24;
 
     private KubeJsToolExecutor() {
     }
@@ -34,17 +38,64 @@ public final class KubeJsToolExecutor {
         if (source == null || source.getServer() == null) {
             return new ToolExecutionResult(false, "No server available.");
         }
+
+        MinecraftServer server = source.getServer();
+        boolean internalRegistered = hasInternalExecCommand(server);
+        MineClawd.LOGGER.info("[MineClawd Debug][KubeJS] executeInstant start: source={} perm2={} perm4={} codeChars={} internalRegistered={} {}",
+                safeSourceLabel(source),
+                source.hasPermissionLevel(2),
+                source.hasPermissionLevel(4),
+                code == null ? 0 : code.length(),
+                internalRegistered,
+                commandTreeSnapshot(server));
+
+        if (!internalRegistered) {
+            boolean rewritten = KubeJsScriptManager.ensureScript(server);
+            MineClawd.LOGGER.warn("[MineClawd Debug][KubeJS] Internal command missing before execute. ensureScript rewrote={} scriptPath={}",
+                    rewritten,
+                    KubeJsScriptManager.getScriptPath(server));
+
+            ToolExecutionResult reloadResult = reloadServerScripts(source);
+            MineClawd.LOGGER.warn("[MineClawd Debug][KubeJS] Attempted `kubejs reload server_scripts`: success={} output={}",
+                    reloadResult.success(),
+                    compactForLog(reloadResult.output(), 500));
+
+            internalRegistered = hasInternalExecCommand(server);
+            MineClawd.LOGGER.warn("[MineClawd Debug][KubeJS] Internal command after reload attempt: {} {}",
+                    internalRegistered,
+                    commandTreeSnapshot(server));
+        }
+
+        if (!internalRegistered) {
+            String diagnostics = commandTreeSnapshot(server);
+            MineClawd.LOGGER.error("[MineClawd Debug][KubeJS] Cannot execute instant script because command is missing. {}",
+                    diagnostics);
+            return new ToolExecutionResult(false,
+                    "Internal command `_exec_kubejs_internal` is not registered. "
+                            + "See server logs tagged `[MineClawd Debug][KubeJS]`. "
+                            + diagnostics);
+        }
+
         String encoded = encodeCode(code);
+        MineClawd.LOGGER.info("[MineClawd Debug][KubeJS] executeInstant dispatch: encodedChars={} encodedPreview={}",
+                encoded.length(),
+                compactForLog(encoded, 96));
+
         CapturingCommandOutput output = new CapturingCommandOutput();
         ServerCommandSource toolSource = source.withOutput(output).withMaxLevel(4);
         int result;
-        String command = "_exec_kubejs_internal " + encoded;
+        String command = INTERNAL_EXEC_COMMAND + " " + encoded;
         try {
-            result = source.getServer()
+            result = server
                     .getCommandManager()
                     .getDispatcher()
                     .execute(command, toolSource);
         } catch (Exception e) {
+            MineClawd.LOGGER.error("[MineClawd Debug][KubeJS] executeInstant dispatcher exception: {} command={} {}",
+                    formatException(e),
+                    compactForLog(command, 120),
+                    commandTreeSnapshot(server),
+                    e);
             return new ToolExecutionResult(false, "Command execution exception: " + formatException(e));
         }
         String text = output.joined();
@@ -52,6 +103,10 @@ public final class KubeJsToolExecutor {
         if (text.isBlank()) {
             text = success ? "OK (no output)" : "ERROR (no output)";
         }
+        MineClawd.LOGGER.info("[MineClawd Debug][KubeJS] executeInstant result: brigadierResult={} success={} output={}",
+                result,
+                success,
+                compactForLog(text, 500));
         return new ToolExecutionResult(success, text);
     }
 
@@ -64,7 +119,10 @@ public final class KubeJsToolExecutor {
             return new ToolExecutionResult(false, "Command is empty.");
         }
         String root = command.split("\\s+", 2)[0].toLowerCase(Locale.ROOT);
-        if ("mineclawd".equals(root) || "mclawd".equals(root) || "_exec_kubejs_internal".equals(root)) {
+        if ("mineclawd".equals(root)
+                || "mclawd".equals(root)
+                || "_exec_kubejs_internal".equals(root)
+                || INTERNAL_EXEC_COMMAND.equals(root)) {
             return new ToolExecutionResult(false, "This command is blocked by MineClawd for safety: " + root);
         }
         if ("reload".equals(root)) {
@@ -290,10 +348,89 @@ public final class KubeJsToolExecutor {
             return "";
         }
         String normalized = code.replace("\r\n", "\n").replace("\r", "\n");
-        String escaped = normalized.replace("\n", "\\n");
         return Base64.getUrlEncoder()
                 .withoutPadding()
-                .encodeToString(escaped.getBytes(StandardCharsets.UTF_8));
+                .encodeToString(normalized.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static ToolExecutionResult reloadServerScripts(ServerCommandSource source) {
+        if (source == null || source.getServer() == null) {
+            return new ToolExecutionResult(false, "No server available.");
+        }
+        CapturingCommandOutput output = new CapturingCommandOutput();
+        ServerCommandSource toolSource = source.withOutput(output).withMaxLevel(4);
+        int result;
+        try {
+            result = source.getServer()
+                    .getCommandManager()
+                    .getDispatcher()
+                    .execute("kubejs reload server_scripts", toolSource);
+        } catch (Exception e) {
+            return new ToolExecutionResult(false, "Command execution exception: " + formatException(e));
+        }
+        String text = output.joined();
+        boolean success = result > 0;
+        if (text.isBlank()) {
+            text = success ? "OK (no output)" : "ERROR (no output)";
+        }
+        return new ToolExecutionResult(success, text);
+    }
+
+    private static boolean hasInternalExecCommand(MinecraftServer server) {
+        if (server == null || server.getCommandManager() == null || server.getCommandManager().getDispatcher() == null) {
+            return false;
+        }
+        return server.getCommandManager().getDispatcher().getRoot().getChild(INTERNAL_EXEC_COMMAND) != null;
+    }
+
+    private static String commandTreeSnapshot(MinecraftServer server) {
+        if (server == null || server.getCommandManager() == null || server.getCommandManager().getDispatcher() == null) {
+            return "command_tree=unavailable";
+        }
+        var root = server.getCommandManager().getDispatcher().getRoot();
+        if (root == null) {
+            return "command_tree=root_null";
+        }
+        List<String> names = root.getChildren().stream()
+                .map(node -> node.getName())
+                .sorted()
+                .limit(COMMAND_SAMPLE_SIZE)
+                .toList();
+        boolean hasInternal = root.getChild(INTERNAL_EXEC_COMMAND) != null;
+        boolean hasKubejs = root.getChild("kubejs") != null;
+        return "command_tree{total_roots=" + root.getChildren().size()
+                + ",has_internal=" + hasInternal
+                + ",has_kubejs=" + hasKubejs
+                + ",sample=" + String.join(",", names)
+                + "}";
+    }
+
+    private static String safeSourceLabel(ServerCommandSource source) {
+        if (source == null) {
+            return "<null-source>";
+        }
+        try {
+            if (source.getEntity() != null && source.getEntity().getName() != null) {
+                return source.getEntity().getName().getString();
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            return source.getName();
+        } catch (Exception ignored) {
+        }
+        return "<unknown-source>";
+    }
+
+    private static String compactForLog(String text, int maxChars) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = text.replace("\r\n", "\n").replace('\r', '\n').replace('\n', '|').trim();
+        if (maxChars <= 0 || normalized.length() <= maxChars) {
+            return normalized;
+        }
+        return normalized.substring(0, maxChars) + "...(truncated)";
     }
 
     private static String formatException(Throwable throwable) {

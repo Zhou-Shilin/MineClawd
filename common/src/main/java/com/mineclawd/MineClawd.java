@@ -161,6 +161,7 @@ public class MineClawd {
     private static final int HISTORY_PACKET_MAX_CHARS = 262_144;
     private static final int SESSIONS_PACKET_MAX_CHARS = 262_144;
     private static final int ASSETS_PACKET_MAX_CHARS = 262_144;
+    private static final int CONFIG_SYNC_PACKET_MAX_CHARS = 32_767;
     private static final int AGENT_STREAM_REQUEST_ID_MAX_CHARS = 64;
     private static final int AGENT_STREAM_PACKET_MAX_CHARS = 32_767;
     private static final int AGENT_STREAM_CHUNK_CHARS = 3_000;
@@ -356,6 +357,7 @@ public class MineClawd {
                 return;
             }
             server.execute(() -> {
+                    CLIENT_MOD_READY.remove(player.getUuid());
                     CLIENT_GUI_ENABLED.remove(player.getUuid());
                     DynamicContentRegistry.loadPersistentState(server);
                     instance.sendBroadcastTargetSync(player);
@@ -382,6 +384,7 @@ public class MineClawd {
                     server.execute(() -> {
                         CLIENT_MOD_READY.put(player.getUuid(), Boolean.TRUE);
                         CLIENT_GUI_ENABLED.put(player.getUuid(), finalGuiEnabled);
+                        LOGGER.info("[MineClawd] Client mod ready: player={} gui={}", player.getName().getString(), finalGuiEnabled);
                         instance.sendBroadcastTargetSync(player);
                         instance.sendAssistiveTouchSync(player);
                         DynamicContentRegistry.syncToPlayer(player);
@@ -570,9 +573,61 @@ public class MineClawd {
         }
         RequestBroadcastTarget target = PLAYER_SETTINGS.getRequestBroadcastTarget(player.getUuidAsString());
         var payload = new PacketByteBuf(Unpooled.buffer());
-        payload.writeString(target.commandValue());
-        NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_CONFIG, payload);
+        payload.writeString(target.commandValue(), 64);
+        payload.writeString(buildConfigSyncPayload(), CONFIG_SYNC_PACKET_MAX_CHARS);
+        if (!sendPacketToPlayer(player, MineClawdNetworking.OPEN_CONFIG, payload, "open_config")) {
+            sendAgentMessage(source, "Failed to open config GUI due to a network sync error.");
+            sendAgentMessage(source, "You can still configure from server commands: `/mineclawd config <key> <value>`.");
+            sendAgentMessage(source, "Available keys: `" + String.join("`, `", CONFIG_KEYS) + "`.");
+        }
         return 1;
+    }
+
+    private String buildConfigSyncPayload() {
+        MineClawdConfig config = MineClawdConfig.get();
+        if (config == null) {
+            config = MineClawdConfig.HANDLER.defaults();
+        }
+        JsonObject root = new JsonObject();
+        MineClawdConfig.LlmProvider provider = config.provider == null
+                ? MineClawdConfig.LlmProvider.OPENAI
+                : config.provider;
+        root.addProperty("provider", provider == MineClawdConfig.LlmProvider.OPENAI ? "openai" : "vertex-ai");
+        root.addProperty("endpoint", config.endpoint == null ? "" : config.endpoint);
+        root.addProperty("apiKey", config.apiKey == null ? "" : config.apiKey);
+        root.addProperty("tavilyApiKey", config.tavilyApiKey == null ? "" : config.tavilyApiKey);
+        root.addProperty("model", config.model == null ? "" : config.model);
+        root.addProperty("summarizeModel", config.summarizeModel == null ? "" : config.summarizeModel);
+        root.addProperty("vertexEndpoint", config.vertexEndpoint == null ? "" : config.vertexEndpoint);
+        root.addProperty("vertexApiKey", config.vertexApiKey == null ? "" : config.vertexApiKey);
+        root.addProperty("vertexModel", config.vertexModel == null ? "" : config.vertexModel);
+        root.addProperty("vertexSummarizeModel", config.vertexSummarizeModel == null ? "" : config.vertexSummarizeModel);
+        root.addProperty("debugMode", config.debugMode);
+        root.addProperty("limitToolCalls", config.limitToolCalls);
+        root.addProperty("toolCallLimit", Math.max(TOOL_LIMIT_MIN, Math.min(TOOL_LIMIT_MAX, config.toolCallLimit)));
+        root.addProperty("systemPrompt", config.systemPrompt == null ? "" : config.systemPrompt);
+        MineClawdConfig.DynamicRegistryMode mode = config.dynamicRegistryMode == null
+                ? MineClawdConfig.DynamicRegistryMode.AUTO
+                : config.dynamicRegistryMode;
+        root.addProperty("dynamicRegistryMode", mode.name().toLowerCase(Locale.ROOT));
+        String payload = root.toString();
+        if (payload.length() <= CONFIG_SYNC_PACKET_MAX_CHARS) {
+            return payload;
+        }
+        String systemPrompt = config.systemPrompt == null ? "" : config.systemPrompt;
+        if (systemPrompt.length() > 4096) {
+            root.addProperty("systemPrompt", systemPrompt.substring(0, 4096));
+            payload = root.toString();
+            if (payload.length() <= CONFIG_SYNC_PACKET_MAX_CHARS) {
+                return payload;
+            }
+        }
+        root.addProperty("systemPrompt", "");
+        payload = root.toString();
+        if (payload.length() <= CONFIG_SYNC_PACKET_MAX_CHARS) {
+            return payload;
+        }
+        return "{}";
     }
 
     private void sendBroadcastTargetSync(ServerPlayerEntity player) {
@@ -585,7 +640,7 @@ public class MineClawd {
         RequestBroadcastTarget target = PLAYER_SETTINGS.getRequestBroadcastTarget(player.getUuidAsString());
         var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeString(target.commandValue());
-        NetworkManager.sendToPlayer(player, MineClawdNetworking.SYNC_BROADCAST_TARGET, payload);
+        sendPacketToPlayer(player, MineClawdNetworking.SYNC_BROADCAST_TARGET, payload, "sync_broadcast_target");
     }
 
     private void sendAssistiveTouchSync(ServerPlayerEntity player) {
@@ -598,7 +653,7 @@ public class MineClawd {
         boolean enabled = PLAYER_SETTINGS.isAssistiveTouchEnabled(player.getUuidAsString());
         var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeBoolean(enabled);
-        NetworkManager.sendToPlayer(player, MineClawdNetworking.SYNC_ASSISTIVE_TOUCH, payload);
+        sendPacketToPlayer(player, MineClawdNetworking.SYNC_ASSISTIVE_TOUCH, payload, "sync_assistive_touch");
     }
 
     private CompletableFuture<Suggestions> suggestConfigKey(ServerCommandSource source, SuggestionsBuilder builder) {
@@ -705,7 +760,12 @@ public class MineClawd {
             source.sendError(Text.literal("MineClawd: unknown config key. Available: " + String.join(", ", CONFIG_KEYS)));
             return 0;
         }
-        String value = rawValue == null ? "" : rawValue.trim();
+        String normalizedRawValue = rawValue == null ? "" : rawValue;
+        String value = normalizedRawValue.trim();
+        if ("\"\"".equals(value) || "''".equals(value)) {
+            normalizedRawValue = "";
+            value = "";
+        }
 
         if ("broadcast-requests-to".equals(key)) {
             if (!(source.getEntity() instanceof ServerPlayerEntity player)) {
@@ -784,7 +844,7 @@ public class MineClawd {
                 if ("default".equalsIgnoreCase(value)) {
                     config.systemPrompt = "";
                 } else {
-                    config.systemPrompt = rawValue == null ? "" : rawValue;
+                    config.systemPrompt = normalizedRawValue;
                 }
             }
             default -> {
@@ -1064,7 +1124,9 @@ public class MineClawd {
         );
         var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeString(payloadString, ASSETS_PACKET_MAX_CHARS);
-        NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_ASSETS, payload);
+        if (!sendPacketToPlayer(player, MineClawdNetworking.OPEN_ASSETS, payload, "open_assets")) {
+            sendAgentMessage(source, "Assets overlay packet failed to send; falling back to chat/list commands.");
+        }
     }
 
     private String buildAssetsOverlayPayloadJson(
@@ -1413,7 +1475,9 @@ public class MineClawd {
 
         var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeString(payloadString, SESSIONS_PACKET_MAX_CHARS);
-        NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_SESSIONS, payload);
+        if (!sendPacketToPlayer(player, MineClawdNetworking.OPEN_SESSIONS, payload, "open_sessions")) {
+            sendAgentMessage(source, "Sessions overlay packet failed to send; use `/mineclawd sessions list` as fallback.");
+        }
     }
 
     private String buildSessionsOverlayPayloadJson(
@@ -1908,12 +1972,9 @@ public class MineClawd {
         }
 
         MineClawdConfig config = MineClawdConfig.get();
-        MineClawdConfig.LlmProvider provider = config.provider == null
+        MineClawdConfig.LlmProvider configuredProvider = config.provider == null
                 ? MineClawdConfig.LlmProvider.OPENAI
                 : config.provider;
-        if (!validateConfig(source, config, provider)) {
-            return 0;
-        }
 
         ensureKubeJsScript(source);
 
@@ -1949,6 +2010,13 @@ public class MineClawd {
             return 0;
         }
 
+        MineClawdConfig.LlmProvider provider = resolveProviderForSessionContinuity(configuredProvider, session);
+        if (!validateConfig(source, config, provider)) {
+            ACTIVE_REQUESTS.remove(ownerKey, requestId);
+            return 0;
+        }
+        boolean providerSwitchedForSessionContinuity = provider != configuredProvider;
+
         AgentRuntime runtime = new AgentRuntime(
                 resolveToolLimit(config),
                 isToolLimitEnabled(config),
@@ -1969,7 +2037,13 @@ public class MineClawd {
         if (runtime.limitToolCallsEnabled()) {
             debugLog(runtime, "Tool call limit: %d", runtime.toolLimit());
         }
+        if (providerSwitchedForSessionContinuity) {
+            String providerName = provider == MineClawdConfig.LlmProvider.VERTEX_AI ? "vertex-ai" : "openai";
+            String configuredProviderName = configuredProvider == MineClawdConfig.LlmProvider.VERTEX_AI ? "vertex-ai" : "openai";
+            sendAgentMessage(source, "Using `" + providerName + "` for this request to match existing session history (configured provider is `" + configuredProviderName + "`).");
+        }
         traceLog(runtime, "USER", request);
+        agentLog(runtime, "User request from %s: %s", ownerKey, request);
         sendPromptEcho(source, request);
         sendTaskStatus(source, true);
         if (runtime.clientStreamEnabled()) {
@@ -2021,6 +2095,27 @@ public class MineClawd {
         }
 
         return 1;
+    }
+
+    private MineClawdConfig.LlmProvider resolveProviderForSessionContinuity(
+            MineClawdConfig.LlmProvider configuredProvider,
+            SessionData session
+    ) {
+        MineClawdConfig.LlmProvider base = configuredProvider == null
+                ? MineClawdConfig.LlmProvider.OPENAI
+                : configuredProvider;
+        if (session == null) {
+            return base;
+        }
+        int openAiVisibleCount = countOpenAiVisibleMessages(session.openAiHistory());
+        int vertexVisibleCount = countVertexVisibleMessages(session.vertexHistory());
+        if (base == MineClawdConfig.LlmProvider.OPENAI && openAiVisibleCount == 0 && vertexVisibleCount > 0) {
+            return MineClawdConfig.LlmProvider.VERTEX_AI;
+        }
+        if (base == MineClawdConfig.LlmProvider.VERTEX_AI && vertexVisibleCount == 0 && openAiVisibleCount > 0) {
+            return MineClawdConfig.LlmProvider.OPENAI;
+        }
+        return base;
     }
 
     private void sendPromptEcho(ServerCommandSource source, String request) {
@@ -2198,7 +2293,7 @@ public class MineClawd {
         packet.writeString(safeRequestId, AGENT_STREAM_REQUEST_ID_MAX_CHARS);
         packet.writeByte(type.id());
         packet.writeString(safePayload, AGENT_STREAM_PACKET_MAX_CHARS);
-        NetworkManager.sendToPlayer(player, MineClawdNetworking.AGENT_STREAM_EVENT, packet);
+        sendPacketToPlayer(player, MineClawdNetworking.AGENT_STREAM_EVENT, packet, "agent_stream_event");
     }
 
     private void finishRequestWithRuntimeError(ServerCommandSource source, AgentRuntime runtime, String message) {
@@ -2252,11 +2347,33 @@ public class MineClawd {
         if (source.getServer() == null) {
             return;
         }
-        boolean created = KubeJsScriptManager.ensureScript(source.getServer());
+        MinecraftServer server = source.getServer();
+        boolean hadInternalCommand = hasInternalKubeJsCommand(server);
+        LOGGER.info("[MineClawd Debug][KubeJS] ensureKubeJsScript start: runDir={} internalCommandBefore={} source={} perm2={} perm4={}",
+                server.getRunDirectory(),
+                hadInternalCommand,
+                source.getName(),
+                source.hasPermissionLevel(2),
+                source.hasPermissionLevel(4));
+
+        boolean created = KubeJsScriptManager.ensureScript(server);
         if (created) {
             sendAgentMessage(source, "Generated the internal KubeJS script and reloading `server_scripts`.");
-            source.getServer().getCommandManager().executeWithPrefix(source, "/kubejs reload server_scripts");
+            server.getCommandManager().executeWithPrefix(source, "/kubejs reload server_scripts");
+            LOGGER.info("[MineClawd Debug][KubeJS] ensureKubeJsScript updated script and reloaded server_scripts: internalCommandAfterReload={}",
+                    hasInternalKubeJsCommand(server));
+        } else {
+            LOGGER.info("[MineClawd Debug][KubeJS] ensureKubeJsScript script unchanged: internalCommandAfterCheck={}",
+                    hasInternalKubeJsCommand(server));
         }
+    }
+
+    private boolean hasInternalKubeJsCommand(MinecraftServer server) {
+        if (server == null || server.getCommandManager() == null || server.getCommandManager().getDispatcher() == null) {
+            return false;
+        }
+        return server.getCommandManager().getDispatcher().getRoot().getChild("_exec_kubejs_internal_mc") != null
+                || server.getCommandManager().getDispatcher().getRoot().getChild("_exec_kubejs_internal") != null;
     }
 
     private void runOpenAiAgent(
@@ -2364,11 +2481,15 @@ public class MineClawd {
         debugLog(runtime, "OpenAI round=%d tool_calls=%d", depth + 1, response.toolCalls() == null ? 0 : response.toolCalls().size());
         if (text != null && !text.isBlank()) {
             traceLog(runtime, "ASSISTANT", text);
+            agentLog(runtime, "Agent response: %s", text);
         }
         if (response.toolCalls() != null && !response.toolCalls().isEmpty()) {
             for (OpenAIToolCall call : response.toolCalls()) {
                 debugLog(runtime, "OpenAI tool call: id=%s name=%s args=%s",
                         call == null ? "(null)" : call.id(),
+                        call == null ? "(null)" : call.name(),
+                        call == null ? "(null)" : call.arguments());
+                agentLog(runtime, "Tool call: %s args=%s",
                         call == null ? "(null)" : call.name(),
                         call == null ? "(null)" : call.arguments());
             }
@@ -2554,10 +2675,14 @@ public class MineClawd {
         debugLog(runtime, "Vertex round=%d tool_calls=%d", depth + 1, response.toolCalls() == null ? 0 : response.toolCalls().size());
         if (text != null && !text.isBlank()) {
             traceLog(runtime, "ASSISTANT", text);
+            agentLog(runtime, "Agent response: %s", text);
         }
         if (response.toolCalls() != null && !response.toolCalls().isEmpty()) {
             for (VertexAIToolCall call : response.toolCalls()) {
                 debugLog(runtime, "Vertex tool call: name=%s args=%s",
+                        call == null ? "(null)" : call.name(),
+                        call == null ? "(null)" : call.args());
+                agentLog(runtime, "Tool call: %s args=%s",
                         call == null ? "(null)" : call.name(),
                         call == null ? "(null)" : call.args());
             }
@@ -2683,6 +2808,7 @@ public class MineClawd {
                     clearToolCallProgress(source, runtime, completionDescriptor == null ? statusDescriptor : completionDescriptor);
                     traceLog(runtime, "TOOL_RESULT", "name=" + safeForLog(call.name()) + " output=" + finalOutput);
                     debugLog(runtime, "Tool output #%d: %s", callIndex, finalOutput);
+                    agentLog(runtime, "Tool result: %s -> %s", call.name(), finalOutput);
                     String toolCallId = call.id();
                     if (toolCallId == null || toolCallId.isBlank()) {
                         toolCallId = "unknown";
@@ -2764,6 +2890,7 @@ public class MineClawd {
                     clearToolCallProgress(source, runtime, completionDescriptor == null ? statusDescriptor : completionDescriptor);
                     traceLog(runtime, "TOOL_RESULT", "name=" + safeForLog(call.name()) + " output=" + finalOutput);
                     debugLog(runtime, "Tool output #%d: %s", callIndex, finalOutput);
+                    agentLog(runtime, "Tool result: %s -> %s", call.name(), finalOutput);
                     JsonObject response = new JsonObject();
                     response.addProperty("result", finalOutput);
                     response.addProperty("is_error", finalOutput.startsWith("ERROR:"));
@@ -3349,6 +3476,7 @@ public class MineClawd {
         PENDING_OTHER_TEXT_INPUT.remove(player.getUuid());
 
         boolean questionUiAvailable = canUseAssistiveOverlay(player, MineClawdNetworking.OPEN_QUESTION);
+        boolean deliveredToQuestionUi = false;
         if (questionUiAvailable) {
             QuestionPromptPayload payload = new QuestionPromptPayload(
                     questionId,
@@ -3358,10 +3486,14 @@ public class MineClawd {
             );
             var buffer = new PacketByteBuf(Unpooled.buffer());
             buffer.writeString(payload.toJson());
-            NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_QUESTION, buffer);
+            deliveredToQuestionUi = sendPacketToPlayer(player, MineClawdNetworking.OPEN_QUESTION, buffer, "open_question");
+            if (!deliveredToQuestionUi) {
+                sendPendingQuestionFallback(source, player, pending);
+            }
         } else {
             sendPendingQuestionFallback(source, player, pending);
         }
+        boolean notifyInChat = !deliveredToQuestionUi;
 
         CompletableFuture.delayedExecutor(QUESTION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
             if (source.getServer() == null) {
@@ -3372,7 +3504,7 @@ public class MineClawd {
                 PendingQuestion current = PENDING_QUESTIONS_BY_ID.get(questionId);
                 if (current == pending) {
                     completePendingQuestion(current, "SKIPPED: User did not respond within 60 seconds.");
-                    if (!questionUiAvailable) {
+                    if (notifyInChat) {
                         player.sendMessage(Text.empty().append(agentPrefix())
                                 .append(renderAgentBody(null, "Question timed out. Continuing with skip result.")), false);
                     }
@@ -5010,6 +5142,13 @@ public class MineClawd {
         return text.replace('\r', ' ').replace('\n', ' ').trim();
     }
 
+    private void agentLog(AgentRuntime runtime, String format, Object... args) {
+        if (runtime == null) {
+            return;
+        }
+        LOGGER.info("[MineClawd] [session:{}] {}", runtime.sessionId(), String.format(format, args));
+    }
+
     private String summarizeThrowable(Throwable throwable) {
         if (throwable == null) {
             return "unknown error";
@@ -5127,6 +5266,7 @@ public class MineClawd {
         }
         CANCELLED_REQUEST_IDS.remove(runtime.requestId());
         debugLog(runtime, "Request finished.");
+        agentLog(runtime, "Request finished.");
     }
 
     private void maybeGenerateSessionTitle(
@@ -5277,11 +5417,7 @@ public class MineClawd {
         if (session != null && runtime.interactiveErrorActions()) {
             FailedRequestContext failed = registerFailedRequest(runtime, provider);
             if (runtime.clientStreamEnabled()) {
-                StringBuilder sb = new StringBuilder();
-                sb.append("Oops! ").append(errorMessage);
-                sb.append("\nRetry command: /mineclawd retry ").append(failed.token());
-                sb.append("\nAdjust prompt command: ").append(buildAdjustPromptCommand(failed.request()));
-                sendAgentStreamEvent(source, runtime, AgentStreamEventType.ERROR, sb.toString());
+                sendAgentStreamEvent(source, runtime, AgentStreamEventType.ERROR, buildClientStreamErrorPayload(errorMessage, failed));
             } else {
                 sendLlmErrorWithActions(source, failed, errorMessage);
             }
@@ -5297,6 +5433,15 @@ public class MineClawd {
         }
         sendTaskStatus(source, false);
         finishActiveRequest(runtime);
+    }
+
+    private String buildClientStreamErrorPayload(String errorMessage, FailedRequestContext failed) {
+        String normalized = errorMessage == null || errorMessage.isBlank() ? "unknown error" : errorMessage;
+        StringBuilder builder = new StringBuilder("Oops! ").append(normalized);
+        if (failed != null && failed.token() != null && !failed.token().isBlank()) {
+            builder.append("\nRetry token: ").append(failed.token());
+        }
+        return builder.toString();
     }
 
     private FailedRequestContext registerFailedRequest(AgentRuntime runtime, MineClawdConfig.LlmProvider provider) {
@@ -5743,7 +5888,9 @@ public class MineClawd {
 
         var payload = new PacketByteBuf(Unpooled.buffer());
         payload.writeString(payloadString, HISTORY_PACKET_MAX_CHARS);
-        NetworkManager.sendToPlayer(player, MineClawdNetworking.OPEN_HISTORY_BOOK, payload);
+        if (!sendPacketToPlayer(player, MineClawdNetworking.OPEN_HISTORY_BOOK, payload, "open_history_book")) {
+            sendAgentMessage(source, "History book packet failed to send; use `/mineclawd sessions list` for chat fallback.");
+        }
     }
 
     private record RequestOptions(
@@ -5787,6 +5934,27 @@ public class MineClawd {
             return false;
         }
         return PLAYER_SETTINGS.isAssistiveTouchEnabled(player.getUuidAsString());
+    }
+
+    private boolean sendPacketToPlayer(ServerPlayerEntity player, Identifier channel, PacketByteBuf payload, String context) {
+        if (player == null || channel == null || payload == null) {
+            return false;
+        }
+        try {
+            NetworkManager.sendToPlayer(player, channel, payload);
+            return true;
+        } catch (Throwable throwable) {
+            CLIENT_MOD_READY.remove(player.getUuid());
+            CLIENT_GUI_ENABLED.remove(player.getUuid());
+            LOGGER.warn(
+                    "[MineClawd] Failed to send packet context={} player={} channel={} reason={}",
+                    context,
+                    player.getName().getString(),
+                    channel,
+                    summarizeThrowable(throwable)
+            );
+            return false;
+        }
     }
 
     public static boolean canSendToClient(ServerPlayerEntity player, Identifier channel) {
