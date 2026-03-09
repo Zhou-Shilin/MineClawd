@@ -5507,9 +5507,10 @@ public class MineClawd {
             SessionData session
     ) {
         String configured = config == null ? "" : config.systemPrompt;
-        String basePrompt = configured == null || configured.isBlank()
-                ? BASE_SYSTEM_PROMPT
-                : configured.trim();
+        if (configured != null && !configured.isBlank()) {
+            return configured.trim();
+        }
+        String basePrompt = BASE_SYSTEM_PROMPT;
         Persona persona = PERSONA_MANAGER.loadActivePersona(ownerKey);
         Path serverRoot = WorkspaceFileToolExecutor.serverRoot(source);
         if (serverRoot == null) {
