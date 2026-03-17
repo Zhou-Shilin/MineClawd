@@ -9,6 +9,8 @@ import net.neoforged.neoforge.fluids.FluidType;
 import java.util.function.Supplier;
 
 public final class DynamicFluidNeoForge {
+    private static final FluidType DEFAULT_DYNAMIC_FLUID_TYPE = Fluids.WATER.getFluidType();
+
     private DynamicFluidNeoForge() {
     }
 
@@ -45,10 +47,12 @@ public final class DynamicFluidNeoForge {
     }
 
     private static FluidType resolveType(int slot) {
+        // Keep dynamic placeholder behavior aligned with the configured material fluid.
+        // Fallback to water type when a slot has no resolved material to satisfy NeoForge/Connector FluidType queries.
         Fluid materialFluid = DynamicContentRegistry.materialFluidForSlot(slot);
         if (materialFluid != null && materialFluid != Fluids.EMPTY) {
             return materialFluid.getFluidType();
         }
-        return Fluids.WATER.getFluidType();
+        return DEFAULT_DYNAMIC_FLUID_TYPE;
     }
 }

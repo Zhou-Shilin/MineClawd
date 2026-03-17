@@ -1,5 +1,6 @@
 package com.mineclawd.dynamic;
 
+import com.mineclawd.MineClawd;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -20,8 +21,14 @@ import java.lang.reflect.Constructor;
 import java.util.function.Supplier;
 
 public abstract class DynamicFluid extends FlowableFluid {
+    // Keep these names aligned with NeoForge-side classes in neoforge/src/main/java/com/mineclawd/dynamic/DynamicFluidNeoForge.java.
     private static final String NEOFORGE_STILL_CLASS = "com.mineclawd.dynamic.DynamicFluidNeoForge$Still";
     private static final String NEOFORGE_FLOWING_CLASS = "com.mineclawd.dynamic.DynamicFluidNeoForge$Flowing";
+    private static final Class<?>[] VARIANT_CONSTRUCTOR_SIGNATURE = new Class<?>[]{
+            int.class, Supplier.class, Supplier.class, Supplier.class
+    };
+    private static final Constructor<? extends Still> NEOFORGE_STILL_CTOR = resolveVariantConstructor(NEOFORGE_STILL_CLASS, Still.class);
+    private static final Constructor<? extends Flowing> NEOFORGE_FLOWING_CTOR = resolveVariantConstructor(NEOFORGE_FLOWING_CLASS, Flowing.class);
 
     private final int slot;
     private final Supplier<? extends FlowableFluid> stillSupplier;
@@ -115,8 +122,7 @@ public abstract class DynamicFluid extends FlowableFluid {
             Supplier<? extends Item> bucketSupplier
     ) {
         Still still = instantiateVariant(
-                NEOFORGE_STILL_CLASS,
-                Still.class,
+                NEOFORGE_STILL_CTOR,
                 slot,
                 stillSupplier,
                 flowingSupplier,
@@ -135,8 +141,7 @@ public abstract class DynamicFluid extends FlowableFluid {
             Supplier<? extends Item> bucketSupplier
     ) {
         Flowing flowing = instantiateVariant(
-                NEOFORGE_FLOWING_CLASS,
-                Flowing.class,
+                NEOFORGE_FLOWING_CTOR,
                 slot,
                 stillSupplier,
                 flowingSupplier,
@@ -149,13 +154,29 @@ public abstract class DynamicFluid extends FlowableFluid {
     }
 
     private static <T extends DynamicFluid> T instantiateVariant(
-            String className,
-            Class<T> expectedType,
+            Constructor<? extends T> ctor,
             int slot,
             Supplier<? extends FlowableFluid> stillSupplier,
             Supplier<? extends FlowableFluid> flowingSupplier,
             Supplier<? extends Item> bucketSupplier
     ) {
+        if (ctor == null) {
+            return null;
+        }
+        try {
+            return ctor.newInstance(slot, stillSupplier, flowingSupplier, bucketSupplier);
+        } catch (ReflectiveOperationException exception) {
+            MineClawd.LOGGER.debug(
+                    "Failed to instantiate dynamic fluid platform variant {} for slot {}.",
+                    ctor.getDeclaringClass().getName(),
+                    slot,
+                    exception
+            );
+            return null;
+        }
+    }
+
+    private static <T extends DynamicFluid> Constructor<? extends T> resolveVariantConstructor(String className, Class<T> expectedType) {
         try {
             Class<?> raw = Class.forName(className);
             if (!expectedType.isAssignableFrom(raw)) {
@@ -163,13 +184,32 @@ public abstract class DynamicFluid extends FlowableFluid {
             }
             @SuppressWarnings("unchecked")
             Class<? extends T> variantClass = (Class<? extends T>) raw;
-            Constructor<? extends T> ctor = variantClass.getConstructor(int.class, Supplier.class, Supplier.class, Supplier.class);
-            return ctor.newInstance(slot, stillSupplier, flowingSupplier, bucketSupplier);
-        } catch (ReflectiveOperationException ignored) {
-            return null;
+            for (Constructor<?> candidate : variantClass.getDeclaredConstructors()) {
+                if (hasVariantConstructorSignature(candidate.getParameterTypes())) {
+                    @SuppressWarnings("unchecked")
+                    Constructor<? extends T> ctor = (Constructor<? extends T>) candidate;
+                    return ctor;
+                }
+            }
+        } catch (ReflectiveOperationException exception) {
+            MineClawd.LOGGER.debug("Dynamic fluid platform variant {} is unavailable.", className, exception);
         }
+        return null;
     }
 
+    private static boolean hasVariantConstructorSignature(Class<?>[] parameterTypes) {
+        if (parameterTypes.length != VARIANT_CONSTRUCTOR_SIGNATURE.length) {
+            return false;
+        }
+        for (int i = 0; i < parameterTypes.length; i++) {
+            if (!VARIANT_CONSTRUCTOR_SIGNATURE[i].isAssignableFrom(parameterTypes[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Must remain non-final so NeoForge can provide a getFluidType override subclass.
     public static class Flowing extends DynamicFluid {
         public Flowing(
                 int slot,
@@ -197,6 +237,7 @@ public abstract class DynamicFluid extends FlowableFluid {
         }
     }
 
+    // Must remain non-final so NeoForge can provide a getFluidType override subclass.
     public static class Still extends DynamicFluid {
         public Still(
                 int slot,
