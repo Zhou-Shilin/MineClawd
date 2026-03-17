@@ -42,6 +42,7 @@ public final class DynamicContentRegistry {
     private static final String DEFAULT_ITEM_MATERIAL = "minecraft:stick";
     private static final String DEFAULT_BLOCK_MATERIAL = "minecraft:stone";
     private static final String DEFAULT_FLUID_MATERIAL = "minecraft:water";
+    private static final String SINYTRA_CONNECTOR_MOD_ID = "connector";
 
     private static final DynamicItem[] ITEM_PLACEHOLDERS = new DynamicItem[SLOT_COUNT];
     private static final DynamicBlock[] BLOCK_PLACEHOLDERS = new DynamicBlock[SLOT_COUNT];
@@ -643,7 +644,9 @@ public final class DynamicContentRegistry {
     }
 
     private static boolean resolveRuntimeEnabled(MineClawdConfig.DynamicRegistryMode mode) {
-        if (Platform.getEnvironment() == Env.CLIENT && Platform.isModLoaded("connector")) {
+        // Connector's FluidRendererCompat queries Fluid#getFluidType for every registered fluid during client setup.
+        // Our dynamic placeholder fluids extend FlowableFluid and trip NeoForge's "Mod fluids must override getFluidType" guard.
+        if (Platform.getEnvironment() == Env.CLIENT && Platform.isModLoaded(SINYTRA_CONNECTOR_MOD_ID)) {
             MineClawd.LOGGER.warn("Sinytra Connector detected. Disabling dynamic placeholder registry to avoid FluidType compatibility crashes.");
             return false;
         }
