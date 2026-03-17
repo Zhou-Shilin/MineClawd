@@ -16,9 +16,13 @@ import net.minecraft.world.World;
 import net.minecraft.world.WorldAccess;
 import net.minecraft.world.WorldView;
 
+import java.lang.reflect.Constructor;
 import java.util.function.Supplier;
 
 public abstract class DynamicFluid extends FlowableFluid {
+    private static final String NEOFORGE_STILL_CLASS = "com.mineclawd.dynamic.DynamicFluidNeoForge$Still";
+    private static final String NEOFORGE_FLOWING_CLASS = "com.mineclawd.dynamic.DynamicFluidNeoForge$Flowing";
+
     private final int slot;
     private final Supplier<? extends FlowableFluid> stillSupplier;
     private final Supplier<? extends FlowableFluid> flowingSupplier;
@@ -100,7 +104,73 @@ public abstract class DynamicFluid extends FlowableFluid {
         return fluid == getStill() || fluid == getFlowing();
     }
 
-    public static final class Flowing extends DynamicFluid {
+    protected final int slot() {
+        return slot;
+    }
+
+    public static Still createStill(
+            int slot,
+            Supplier<? extends FlowableFluid> stillSupplier,
+            Supplier<? extends FlowableFluid> flowingSupplier,
+            Supplier<? extends Item> bucketSupplier
+    ) {
+        Still still = instantiateVariant(
+                NEOFORGE_STILL_CLASS,
+                Still.class,
+                slot,
+                stillSupplier,
+                flowingSupplier,
+                bucketSupplier
+        );
+        if (still != null) {
+            return still;
+        }
+        return new Still(slot, stillSupplier, flowingSupplier, bucketSupplier);
+    }
+
+    public static Flowing createFlowing(
+            int slot,
+            Supplier<? extends FlowableFluid> stillSupplier,
+            Supplier<? extends FlowableFluid> flowingSupplier,
+            Supplier<? extends Item> bucketSupplier
+    ) {
+        Flowing flowing = instantiateVariant(
+                NEOFORGE_FLOWING_CLASS,
+                Flowing.class,
+                slot,
+                stillSupplier,
+                flowingSupplier,
+                bucketSupplier
+        );
+        if (flowing != null) {
+            return flowing;
+        }
+        return new Flowing(slot, stillSupplier, flowingSupplier, bucketSupplier);
+    }
+
+    private static <T extends DynamicFluid> T instantiateVariant(
+            String className,
+            Class<T> expectedType,
+            int slot,
+            Supplier<? extends FlowableFluid> stillSupplier,
+            Supplier<? extends FlowableFluid> flowingSupplier,
+            Supplier<? extends Item> bucketSupplier
+    ) {
+        try {
+            Class<?> raw = Class.forName(className);
+            if (!expectedType.isAssignableFrom(raw)) {
+                return null;
+            }
+            @SuppressWarnings("unchecked")
+            Class<? extends T> variantClass = (Class<? extends T>) raw;
+            Constructor<? extends T> ctor = variantClass.getConstructor(int.class, Supplier.class, Supplier.class, Supplier.class);
+            return ctor.newInstance(slot, stillSupplier, flowingSupplier, bucketSupplier);
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    public static class Flowing extends DynamicFluid {
         public Flowing(
                 int slot,
                 Supplier<? extends FlowableFluid> stillSupplier,
@@ -127,7 +197,7 @@ public abstract class DynamicFluid extends FlowableFluid {
         }
     }
 
-    public static final class Still extends DynamicFluid {
+    public static class Still extends DynamicFluid {
         public Still(
                 int slot,
                 Supplier<? extends FlowableFluid> stillSupplier,
