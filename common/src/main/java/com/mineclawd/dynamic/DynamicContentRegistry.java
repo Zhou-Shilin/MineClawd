@@ -643,6 +643,10 @@ public final class DynamicContentRegistry {
     }
 
     private static boolean resolveRuntimeEnabled(MineClawdConfig.DynamicRegistryMode mode) {
+        if (Platform.getEnvironment() == Env.CLIENT && Platform.isModLoaded("connector")) {
+            MineClawd.LOGGER.warn("Sinytra Connector detected. Disabling dynamic placeholder registry to avoid FluidType compatibility crashes.");
+            return false;
+        }
         if (mode == MineClawdConfig.DynamicRegistryMode.ENABLED) {
             return true;
         }
