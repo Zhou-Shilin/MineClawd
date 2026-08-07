@@ -51,8 +51,8 @@ public class MineClawdConfig {
     public String endpoint = "https://api.openai.com/v1";
     public String apiKey = "";
     public String tavilyApiKey = "";
-    public String model = "gpt-5.2";
-    public String summarizeModel = "gpt-5.2";
+    public String model = "26.1.2";
+    public String summarizeModel = "26.1.2";
     public String vertexEndpoint = "https://aiplatform.googleapis.com/v1";
     public String vertexApiKey = "";
     public String vertexModel = "gemini-3.1-pro-preview";
